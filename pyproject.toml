@@ -23,3 +23,6 @@ dev = [
 testpaths = ["tests"]
 pythonpath = ["src"]
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "integration: end-to-end integration tests (requires Ollama running)",
+]
