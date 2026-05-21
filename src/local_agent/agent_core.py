@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from local_agent.model_router import ModelRouter
@@ -76,9 +77,10 @@ class AgentCore:
             The full system prompt string.
         """
         base: str = (
-            "You are a coding assistant. You can use tools to help the user. "
-            "When you need to use a tool, respond with a JSON object containing "
-            "\"tool\" (the tool name) and \"args\" (a dict of arguments). "
+            "You are a coding assistant. You can use tools to help the user.\n\n"
+            "When you need to use a tool, respond with ONLY a JSON object containing "
+            "\"tool\" (the tool name) and \"args\" (a dict of arguments). Do NOT include "
+            "any text before or after the JSON.\n\n"
             'Example: {"tool": "read_file", "args": {"path": "file.txt"}}\n\n'
         )
         tools_section: str = self._registry.get_definitions()
@@ -93,13 +95,21 @@ class AgentCore:
         Returns:
             The tool execution result string, or None if no tool call was found.
         """
+        # First try parsing the whole response as JSON
+        data: Any | None = None
         try:
-            data: Any = json.loads(response.strip())
+            data = json.loads(response.strip())
         except (json.JSONDecodeError, ValueError):
-            # Not JSON — treat as plain text response
-            return None
+            # If that fails, try to extract a JSON object from the response
+            # Pattern handles one level of nested braces (e.g., "args": {"key": "val"})
+            match = re.search(r'\{[^{}]*"tool"\s*:[^{}]*\{[^{}]*\}[^{}]*\}', response, re.DOTALL)
+            if match:
+                try:
+                    data = json.loads(match.group())
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
-        if not isinstance(data, dict) or "tool" not in data:
+        if data is None or not isinstance(data, dict) or "tool" not in data:
             return None
 
         tool_name: str = data["tool"]

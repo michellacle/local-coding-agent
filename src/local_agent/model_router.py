@@ -38,7 +38,7 @@ class ModelRouter:
             payload["seed"] = 0
 
         url = f"{self.config.base_url}/chat/completions"
-        resp = httpx.post(url, json=payload)
+        resp = httpx.post(url, json=payload, timeout=120.0)
         resp.raise_for_status()
 
         data: Any = resp.json()

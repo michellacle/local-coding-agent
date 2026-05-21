@@ -70,7 +70,7 @@ All 86 tests should pass.
 ### 6. Run the Agent
 
 ```bash
-python -m local_agent
+  python -m local_agent
 ```
 
 The agent will start in your terminal with a prompt:

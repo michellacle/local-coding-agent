@@ -17,7 +17,7 @@ class LLMConfig:
     """
 
     host: str = "localhost"
-    model: str = "qwen3.5:0.8b"
+    model: str = "qwen3.5:4b"
     port: int = 11434
     deterministic: bool = False
 
@@ -40,7 +40,7 @@ class LLMConfig:
         """
         return cls(
             host=os.environ.get("LLM_HOST", "localhost"),
-            model=os.environ.get("LLM_MODEL", "qwen3.5:0.8b"),
+            model=os.environ.get("LLM_MODEL", "qwen3.5:4b"),
             port=int(os.environ.get("LLM_PORT", "11434")),
             deterministic=os.environ.get("LLM_DETERMINISTIC", "").lower() == "true",
         )

@@ -17,7 +17,7 @@ class TestLLMConfigDefaults:
 
     def test_default_model(self):
         config = LLMConfig()
-        assert config.model == "qwen3.5:0.8b"
+        assert config.model == "qwen3.5:4b"
 
     def test_default_port(self):
         config = LLMConfig()
@@ -55,7 +55,7 @@ class TestLLMConfigFactory:
     def test_from_env_defaults(self):
         config = LLMConfig.from_env()
         assert config.host == "localhost"
-        assert config.model == "qwen3.5:0.8b"
+        assert config.model == "qwen3.5:4b"
         assert config.port == 11434
 
     def test_from_env_custom(self, monkeypatch):

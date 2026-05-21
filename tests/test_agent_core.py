@@ -133,3 +133,30 @@ class TestAgentCore:
 
         result = agent.run_turn("test")
         assert result == "Here's some text with {brackets} but not a tool call."
+
+    def test_run_turn_executes_tool_call_with_prose_prefix(self):
+        """Test that JSON tool calls embedded in prose are extracted and executed."""
+        agent = self._make_agent()
+        agent._registry.register(
+            ToolSchema(
+                name="echo",
+                description="Echo a message",
+                parameters={
+                    "type": "object",
+                    "properties": {"msg": {"type": "string"}},
+                    "required": ["msg"],
+                },
+            ),
+            lambda msg: f"echoed: {msg}",
+        )
+
+        # LLM returns prose before the JSON tool call
+        agent._router.send_message = MagicMock(
+            side_effect=[
+                "I'll help you with that.\n\n{\"tool\": \"echo\", \"args\": {\"msg\": \"hello\"}}",
+                "The echo result was: echoed: hello",
+            ]
+        )
+
+        result = agent.run_turn("echo hello")
+        assert "echoed: hello" in result
