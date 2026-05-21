@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -170,11 +171,27 @@ def register_tools(registry: ToolRegistry) -> None:
 
 def main() -> None:
     """Run the local coding agent."""
+    # Parse CLI args
+    parser = argparse.ArgumentParser(description="Local coding agent")
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help="Single prompt to run in non-interactive mode (runs one turn and exits)",
+    )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=3,
+        help="Max agent turns in --prompt mode (default: 3)",
+    )
+    args = parser.parse_args()
+
     # Load config from environment
     llm_config: LLMConfig = LLMConfig.from_env()
     app_config: AppConfig = AppConfig(
-        llm=llm_config,
         work_dir=Path.cwd(),
+        llm=llm_config,
     )
 
     # Build components
@@ -186,6 +203,12 @@ def main() -> None:
 
     # Build agent
     agent: AgentCore = AgentCore(router=router, registry=registry, streaming=False)
+
+    # Non-interactive mode
+    if args.prompt is not None:
+        _run_non_interactive(agent, args.prompt, args.max_turns)
+        return
+
     ui: TerminalUI = TerminalUI(agent=agent, config=app_config)
 
     # Print welcome
@@ -208,6 +231,20 @@ def main() -> None:
     except KeyboardInterrupt:
         console.print("\n[dim]Interrupted. Goodbye![/dim]")
         sys.exit(0)
+
+
+def _run_non_interactive(agent: AgentCore, prompt: str, max_turns: int) -> None:
+    """Run the agent in non-interactive mode for a single prompt."""
+    console: Console = Console()
+    console.print(f"[bold blue]>[/bold blue] {prompt}")
+
+    for turn in range(max_turns):
+        response: str = agent.run_turn(prompt if turn == 0 else "")
+        console.print(f"[dim]Turn {turn + 1}:[/dim] {response}")
+
+        # If the agent didn't execute a tool (no follow-up), we're done
+        if "tool" not in response.lower():
+            break
 
 
 if __name__ == "__main__":
