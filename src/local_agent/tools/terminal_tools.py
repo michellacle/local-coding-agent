@@ -1,9 +1,16 @@
 """Terminal tools — execute shell commands."""
 
+from __future__ import annotations
+
 import subprocess
+from typing import Any
 
 
-def execute_command(command: str, timeout: int = 180, workdir: str | None = None) -> dict:
+def execute_command(
+    command: str,
+    timeout: int = 180,
+    workdir: str | None = None,
+) -> dict[str, Any]:
     """Execute a shell command and return output and exit code.
 
     Args:
@@ -18,18 +25,18 @@ def execute_command(command: str, timeout: int = 180, workdir: str | None = None
     Raises:
         TimeoutError: If the command exceeds the timeout.
     """
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "shell": True,
         "capture_output": True,
         "text": True,
-        "timeout": timeout,
+        "timeout": float(timeout),
     }
     if workdir is not None:
         kwargs["cwd"] = workdir
 
     result = subprocess.run(command, **kwargs)
 
-    output = result.stdout
+    output: str = result.stdout
     if result.returncode != 0 and result.stderr:
         output = output.rstrip() + "\nSTDERR:\n" + result.stderr
 

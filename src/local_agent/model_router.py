@@ -1,7 +1,9 @@
 """Model Router — LLM client with streaming via OpenAI-compatible API."""
 
+from __future__ import annotations
+
 import json
-from typing import Generator
+from typing import Any, Generator
 
 import httpx
 
@@ -14,10 +16,10 @@ class ModelRouter:
     Works with Ollama, vLLM, and any server exposing /v1/chat/completions.
     """
 
-    def __init__(self, config: LLMConfig):
+    def __init__(self, config: LLMConfig) -> None:
         self.config = config
 
-    def send_message(self, messages: list[dict]) -> str:
+    def send_message(self, messages: list[dict[str, Any]]) -> str:
         """Send messages and return the full completion as a string.
 
         Args:
@@ -26,7 +28,7 @@ class ModelRouter:
         Returns:
             The assistant's response text.
         """
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
         }
@@ -39,10 +41,13 @@ class ModelRouter:
         resp = httpx.post(url, json=payload)
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        data: Any = resp.json()
+        content: str = data["choices"][0]["message"]["content"]
+        return content
 
-    def stream_message(self, messages: list[dict]) -> Generator[str, None, None]:
+    def stream_message(
+        self, messages: list[dict[str, Any]]
+    ) -> Generator[str, None, None]:
         """Send messages and yield content chunks as they arrive.
 
         Args:
@@ -51,7 +56,7 @@ class ModelRouter:
         Yields:
             Non-empty content strings from the streaming response.
         """
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
             "stream": True,
@@ -69,17 +74,17 @@ class ModelRouter:
                 for raw_line in response.iter_lines():
                     # iter_lines may return bytes or str
                     if isinstance(raw_line, bytes):
-                        line = raw_line.decode("utf-8").strip()
+                        line: str = raw_line.decode("utf-8").strip()
                     else:
                         line = raw_line.strip()
                     if not line or not line.startswith("data: "):
                         continue
-                    data_str = line[6:]
+                    data_str: str = line[6:]
                     if data_str == "[DONE]":
                         break
                     try:
-                        chunk = json.loads(data_str)
-                        content = chunk["choices"][0]["delta"].get("content", "")
+                        chunk: dict[str, Any] = json.loads(data_str)
+                        content: str = chunk["choices"][0]["delta"].get("content", "")
                         if content:
                             yield content
                     except (json.JSONDecodeError, KeyError, IndexError):

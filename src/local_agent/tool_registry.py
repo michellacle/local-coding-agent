@@ -18,7 +18,7 @@ class ToolSchema:
 
     name: str
     description: str
-    parameters: dict
+    parameters: dict[str, Any]
 
 
 class ToolRegistry:
@@ -30,9 +30,9 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._schemas: dict[str, ToolSchema] = {}
-        self._functions: dict[str, Callable] = {}
+        self._functions: dict[str, Callable[..., Any]] = {}
 
-    def register(self, schema: ToolSchema, fn: Callable) -> None:
+    def register(self, schema: ToolSchema, fn: Callable[..., Any]) -> None:
         """Register a tool with its schema and implementation.
 
         Args:
@@ -51,7 +51,7 @@ class ToolRegistry:
         """Return all registered tool schemas."""
         return list(self._schemas.values())
 
-    def execute(self, name: str, args: dict) -> Any:
+    def execute(self, name: str, args: dict[str, Any]) -> Any:
         """Validate and execute a tool by name.
 
         Args:
@@ -88,7 +88,7 @@ class ToolRegistry:
         for schema in self._schemas.values():
             lines.append(f"- {schema.name}: {schema.description}")
             if schema.parameters:
-                params_desc = ", ".join(
+                params_desc: str = ", ".join(
                     f"{k} ({v.get('type', 'any')})"
                     for k, v in schema.parameters.get("properties", {}).items()
                 )
@@ -100,10 +100,10 @@ class ToolRegistry:
     # -- validation helpers --
 
     @staticmethod
-    def _validate(schema: ToolSchema, args: dict) -> None:
+    def _validate(schema: ToolSchema, args: dict[str, Any]) -> None:
         """Validate args against a ToolSchema's JSON parameters."""
-        props = schema.parameters.get("properties", {})
-        required = schema.parameters.get("required", [])
+        props: dict[str, Any] = schema.parameters.get("properties", {})
+        required: list[str] = schema.parameters.get("required", [])
 
         # Check required params
         for req in required:
@@ -113,10 +113,15 @@ class ToolRegistry:
                 )
 
         # Check types
-        type_map = {"string": str, "number": (int, float), "integer": int, "boolean": bool}
+        type_map: dict[str, type | tuple[type, ...]] = {
+            "string": str,
+            "number": (int, float),
+            "integer": int,
+            "boolean": bool,
+        }
         for param_name, value in args.items():
             if param_name in props:
-                expected_type_name = props[param_name].get("type")
+                expected_type_name: str | None = props[param_name].get("type")
                 if expected_type_name and expected_type_name in type_map:
                     expected = type_map[expected_type_name]
                     if not isinstance(value, expected):

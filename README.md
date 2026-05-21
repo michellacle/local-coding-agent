@@ -24,6 +24,7 @@ All code must be built with testability in mind:
 - Clean separation of concerns (no monolithic files)
 - Modular architecture where each component has a single responsibility
 - Dependency injection where possible to enable mocking in tests
+- Full type hints on all functions, classes, and variables (strict typing via mypy)
 
 ## Session Summary (May 21, 2026)
 

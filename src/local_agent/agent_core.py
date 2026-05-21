@@ -1,7 +1,9 @@
 """Agent Core — main loop that takes input, calls LLM, parses and executes tool calls."""
 
+from __future__ import annotations
+
 import json
-from typing import Generator
+from typing import Any
 
 from local_agent.model_router import ModelRouter
 from local_agent.tool_registry import ToolRegistry
@@ -19,11 +21,13 @@ class AgentCore:
         - ToolRegistry: handles tool registration and execution
     """
 
-    def __init__(self, router: ModelRouter, registry: ToolRegistry, streaming: bool = False):
+    def __init__(
+        self, router: ModelRouter, registry: ToolRegistry, streaming: bool = False
+    ) -> None:
         self._router = router
         self._registry = registry
         self._streaming = streaming
-        self._history: list[dict] = []
+        self._history: list[dict[str, Any]] = []
 
     def run_turn(self, user_input: str) -> str:
         """Run a single agent turn.
@@ -37,18 +41,18 @@ class AgentCore:
         messages = self._build_messages(user_input)
 
         if self._streaming:
-            full_response = "".join(self._router.stream_message(messages))
+            full_response: str = "".join(self._router.stream_message(messages))
         else:
             full_response = self._router.send_message(messages)
 
         # Try to parse tool calls from the response
-        tool_result = self._try_execute_tool(full_response)
+        tool_result: str | None = self._try_execute_tool(full_response)
         if tool_result is not None:
             return tool_result
 
         return full_response
 
-    def _build_messages(self, user_input: str) -> list[dict]:
+    def _build_messages(self, user_input: str) -> list[dict[str, Any]]:
         """Build the message list including system prompt and history.
 
         Args:
@@ -57,8 +61,8 @@ class AgentCore:
         Returns:
             List of message dicts ready to send to the LLM.
         """
-        system_prompt = self._build_system_prompt()
-        messages: list[dict] = [
+        system_prompt: str = self._build_system_prompt()
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ]
         messages.extend(self._history)
@@ -71,13 +75,13 @@ class AgentCore:
         Returns:
             The full system prompt string.
         """
-        base = (
+        base: str = (
             "You are a coding assistant. You can use tools to help the user. "
             "When you need to use a tool, respond with a JSON object containing "
             "\"tool\" (the tool name) and \"args\" (a dict of arguments). "
-            "Example: {\"tool\": \"read_file\", \"args\": {\"path\": \"file.txt\"}}\n\n"
+            'Example: {"tool": "read_file", "args": {"path": "file.txt"}}\n\n'
         )
-        tools_section = self._registry.get_definitions()
+        tools_section: str = self._registry.get_definitions()
         return base + tools_section
 
     def _try_execute_tool(self, response: str) -> str | None:
@@ -90,7 +94,7 @@ class AgentCore:
             The tool execution result string, or None if no tool call was found.
         """
         try:
-            data = json.loads(response.strip())
+            data: Any = json.loads(response.strip())
         except (json.JSONDecodeError, ValueError):
             # Not JSON — treat as plain text response
             return None
@@ -98,18 +102,18 @@ class AgentCore:
         if not isinstance(data, dict) or "tool" not in data:
             return None
 
-        tool_name = data["tool"]
-        args = data.get("args", {})
+        tool_name: str = data["tool"]
+        args: dict[str, Any] = data.get("args", {})
 
         try:
-            result = self._registry.execute(tool_name, args)
+            result: Any = self._registry.execute(tool_name, args)
         except KeyError:
             return f"Error: tool '{tool_name}' not found."
         except ValueError as e:
             return f"Error executing '{tool_name}': {e}"
 
         # Format the result for the user
-        result_str = str(result)
+        result_str: str = str(result)
         if isinstance(result, dict):
             result_str = json.dumps(result, indent=2)
 
@@ -118,9 +122,9 @@ class AgentCore:
         self._history.append({"role": "user", "content": f"Tool result: {result_str}"})
 
         # Ask the LLM to interpret the tool result
-        follow_up_messages = self._build_messages("")
+        follow_up_messages: list[dict[str, Any]] = self._build_messages("")
         if self._streaming:
-            follow_up = "".join(self._router.stream_message(follow_up_messages))
+            follow_up: str = "".join(self._router.stream_message(follow_up_messages))
         else:
             follow_up = self._router.send_message(follow_up_messages)
 

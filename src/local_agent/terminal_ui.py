@@ -1,10 +1,16 @@
 """Terminal UI — Rich-based CLI with streaming output."""
 
-from typing import Generator
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Generator
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
+
+if TYPE_CHECKING:
+    from local_agent.agent_core import AgentCore
+    from local_agent.config import AppConfig
 
 
 class TerminalUI:
@@ -14,7 +20,7 @@ class TerminalUI:
     agent responses, streaming output, and error formatting.
     """
 
-    def __init__(self, agent, config):
+    def __init__(self, agent: AgentCore, config: AppConfig) -> None:
         """Initialize the terminal UI.
 
         Args:
@@ -24,12 +30,12 @@ class TerminalUI:
         self.agent = agent
         self.config = config
         self.console = Console()
-        self.prompt_prefix = "You"
-        self.stop_phrase = "quit"
+        self.prompt_prefix: str = "You"
+        self.stop_phrase: str = "quit"
 
     def render_welcome(self) -> str:
         """Render and return the welcome message text."""
-        lines = [
+        lines: list[str] = [
             "[bold cyan]Local Coding Agent[/bold cyan]",
             f"Working directory: {self.config.work_dir}",
             "Type your request or [bold]'quit'[/bold] to exit.",
@@ -44,7 +50,9 @@ class TerminalUI:
         """Format an agent response for display."""
         return f"[bold green]Assistant[/bold green]: {response}"
 
-    def render_streaming_chunks(self, chunks: Generator[str, None, None]) -> Generator[str, None, None]:
+    def render_streaming_chunks(
+        self, chunks: Generator[str, None, None]
+    ) -> Generator[str, None, None]:
         """Process streaming chunks and yield formatted output.
 
         Args:
@@ -53,7 +61,7 @@ class TerminalUI:
         Yields:
             Formatted chunk strings ready for display.
         """
-        buffer = ""
+        buffer: str = ""
         for chunk in chunks:
             buffer += chunk
             yield buffer
@@ -69,7 +77,7 @@ class TerminalUI:
         Returns:
             Trimmed input string, or None if empty.
         """
-        cleaned = raw_input.strip()
+        cleaned: str = raw_input.strip()
         return cleaned if cleaned else None
 
     def should_stop(self, user_input: str) -> bool:
@@ -94,9 +102,9 @@ class TerminalUI:
         """
         return self.agent.run_turn(user_input)
 
-    def format_tool_call(self, tool_name: str, args: dict) -> str:
+    def format_tool_call(self, tool_name: str, args: dict[str, object]) -> str:
         """Format a tool call for display."""
-        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        args_str: str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         return f"[dim]Using tool: {tool_name}({args_str})[/dim]"
 
     def format_error(self, error_message: str) -> str:
