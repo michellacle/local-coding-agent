@@ -1,5 +1,16 @@
 # Local Coding Agent
 
+## Target Users
+
+This agent is built for developers who:
+
+- **Value privacy** — don't want their code, prompts, or data sent to third-party cloud providers
+- **Prefer local LLMs** — want full control over which models run and on what hardware
+- **Have modest GPU hardware** — around 8GB of VRAM (e.g., laptop RTX 4070, used desktop GPU)
+- **Want to avoid costly subscriptions** — tired of paying $20-$200/month for Claude Code, Cursor, or similar AI coding tools
+
+If you're a privacy-conscious developer with a local GPU who wants a capable coding agent without monthly fees, this is for you.
+
 ## Project Goal
 
 Build a local-only coding agent grounded in proven agentic architectural patterns. The agent lives in the terminal, integrates deeply with git, supports multi-agent orchestration, and operates fully offline. It aims to rival Claude Code and OpenCode in capability while giving users full control over models, tools, and data.

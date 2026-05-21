@@ -1,4 +1,9 @@
-"""Agent Core — main loop that takes input, calls LLM, parses and executes tool calls."""
+"""Agent Core — main loop that takes input, calls LLM, parses and executes tool calls.
+
+Supports multi-turn tool chaining: after each tool execution, the result is fed
+back to the LLM and the loop continues until the LLM returns a plain-text
+response or max_turns is reached.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,8 @@ class AgentCore:
 
     Takes user input, sends it to the LLM (with tool definitions in the
     system prompt), parses any tool calls from the response, executes them,
-    and returns the result.
+    and loops back with the result — chaining tool calls until the LLM
+    returns a final plain-text answer.
 
     Dependencies are injected for testability:
         - ModelRouter: handles all LLM communication
@@ -23,41 +29,71 @@ class AgentCore:
     """
 
     def __init__(
-        self, router: ModelRouter, registry: ToolRegistry, streaming: bool = False
+        self,
+        router: ModelRouter,
+        registry: ToolRegistry,
+        streaming: bool = False,
+        max_turns: int = 10,
     ) -> None:
         self._router = router
         self._registry = registry
         self._streaming = streaming
+        self._max_turns = max_turns
         self._history: list[dict[str, Any]] = []
 
     def run_turn(self, user_input: str) -> str:
-        """Run a single agent turn.
+        """Run a single agent turn with multi-turn tool chaining.
+
+        Sends the user input to the LLM. If the LLM returns a tool call,
+        executes it, appends the result to history, and asks the LLM again.
+        Repeats until the LLM returns plain text or max_turns is reached.
 
         Args:
             user_input: The user's message or command.
 
         Returns:
-            The agent's response text (after any tool execution).
+            The agent's final response text.
         """
-        messages = self._build_messages(user_input)
+        # Append user message to history
+        self._history.append({"role": "user", "content": user_input})
 
-        if self._streaming:
-            full_response: str = "".join(self._router.stream_message(messages))
-        else:
-            full_response = self._router.send_message(messages)
+        final_response: str = ""
 
-        # Try to parse tool calls from the response
-        tool_result: str | None = self._try_execute_tool(full_response)
-        if tool_result is not None:
-            return tool_result
+        for turn_num in range(self._max_turns):
+            messages = self._build_messages()
 
-        return full_response
+            if self._streaming:
+                full_response: str = "".join(self._router.stream_message(messages))
+            else:
+                full_response = self._router.send_message(messages)
 
-    def _build_messages(self, user_input: str) -> list[dict[str, Any]]:
+            # Store assistant response in history
+            self._history.append({"role": "assistant", "content": full_response})
+
+            # Try to parse and execute a tool call
+            tool_result = self._try_execute_tool(full_response)
+            if tool_result is not None:
+                # Tool was executed — feed result back and continue looping
+                self._history.append({"role": "user", "content": f"Tool result: {tool_result}"})
+                final_response = tool_result  # track last result for debugging
+                continue
+
+            # No tool call — this is the final plain-text response
+            return full_response
+
+        # Max turns reached — return last response
+        return final_response if final_response else self._last_assistant_response
+
+    @property
+    def _last_assistant_response(self) -> str:
+        """Get the last assistant message from history, or empty string."""
+        for msg in reversed(self._history):
+            if msg["role"] == "assistant":
+                return msg["content"]
+        return ""
+
+    def _build_messages(self) -> list[dict[str, Any]]:
         """Build the message list including system prompt and history.
-
-        Args:
-            user_input: The user's latest input.
 
         Returns:
             List of message dicts ready to send to the LLM.
@@ -67,7 +103,6 @@ class AgentCore:
             {"role": "system", "content": system_prompt},
         ]
         messages.extend(self._history)
-        messages.append({"role": "user", "content": user_input})
         return messages
 
     def _build_system_prompt(self) -> str:
@@ -80,8 +115,12 @@ class AgentCore:
             "You are a coding assistant. You can use tools to help the user.\n\n"
             "When you need to use a tool, respond with ONLY a JSON object containing "
             "\"tool\" (the tool name) and \"args\" (a dict of arguments). Do NOT include "
-            "any text before or after the JSON.\n\n"
-            'Example: {"tool": "read_file", "args": {"path": "file.txt"}}\n\n'
+            "any text before or after the JSON. One tool call at a time — the result will "
+            "be fed back to you so you can make the next call.\n\n"
+            "When you have completed the task and have a final answer for the user, "
+            "respond with plain text (no JSON).\n\n"
+            'Example tool call: {"tool": "read_file", "args": {"path": "file.txt"}}\n\n'
+            'Example final answer: "I have created the file successfully."\n\n'
         )
         tools_section: str = self._registry.get_definitions()
         return base + tools_section
@@ -102,7 +141,11 @@ class AgentCore:
         except (json.JSONDecodeError, ValueError):
             # If that fails, try to extract a JSON object from the response
             # Pattern handles one level of nested braces (e.g., "args": {"key": "val"})
-            match = re.search(r'\{[^{}]*"tool"\s*:[^{}]*\{[^{}]*\}[^{}]*\}', response, re.DOTALL)
+            match = re.search(
+                r'\{[^{}]*"tool"\s*:[^{}]*\{[^{}]*\}[^{}]*\}',
+                response,
+                re.DOTALL,
+            )
             if match:
                 try:
                     data = json.loads(match.group())
@@ -122,20 +165,13 @@ class AgentCore:
         except ValueError as e:
             return f"Error executing '{tool_name}': {e}"
 
-        # Format the result for the user
+        # Format the result for feeding back to the LLM
         result_str: str = str(result)
         if isinstance(result, dict):
             result_str = json.dumps(result, indent=2)
 
-        # Store the exchange in history for context
-        self._history.append({"role": "assistant", "content": response})
-        self._history.append({"role": "user", "content": f"Tool result: {result_str}"})
+        return result_str
 
-        # Ask the LLM to interpret the tool result
-        follow_up_messages: list[dict[str, Any]] = self._build_messages("")
-        if self._streaming:
-            follow_up: str = "".join(self._router.stream_message(follow_up_messages))
-        else:
-            follow_up = self._router.send_message(follow_up_messages)
-
-        return follow_up
+    def reset_history(self) -> None:
+        """Clear conversation history. Call between independent user turns."""
+        self._history.clear()

@@ -171,19 +171,18 @@ def register_tools(registry: ToolRegistry) -> None:
 
 def main() -> None:
     """Run the local coding agent."""
-    # Parse CLI args
     parser = argparse.ArgumentParser(description="Local coding agent")
     parser.add_argument(
         "--prompt",
         type=str,
         default=None,
-        help="Single prompt to run in non-interactive mode (runs one turn and exits)",
+        help="Single prompt to run in non-interactive mode (runs one turn with tool chaining and exits)",
     )
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=3,
-        help="Max agent turns in --prompt mode (default: 3)",
+        default=10,
+        help="Max agent turns per prompt for tool chaining (default: 10)",
     )
     args = parser.parse_args()
 
@@ -197,25 +196,24 @@ def main() -> None:
     # Build components
     router: ModelRouter = ModelRouter(llm_config)
     registry: ToolRegistry = ToolRegistry()
-
-    # Register all tools
     register_tools(registry)
 
     # Build agent
-    agent: AgentCore = AgentCore(router=router, registry=registry, streaming=False)
+    agent: AgentCore = AgentCore(
+        router=router, registry=registry, streaming=False, max_turns=args.max_turns
+    )
 
     # Non-interactive mode
     if args.prompt is not None:
-        _run_non_interactive(agent, args.prompt, args.max_turns)
+        _run_non_interactive(agent, args.prompt)
         return
 
     ui: TerminalUI = TerminalUI(agent=agent, config=app_config)
 
-    # Print welcome
     console: Console = Console()
     console.print(ui.render_welcome())
 
-    # Main loop
+    # Main loop — reset history between independent user turns
     try:
         while True:
             raw: str = input(ui.render_input_prompt().replace("[", "").replace("]", ""))
@@ -228,23 +226,22 @@ def main() -> None:
 
             response: str = ui.run_turn(cleaned)
             console.print(ui.render_agent_response(response))
+            agent.reset_history()
     except KeyboardInterrupt:
         console.print("\n[dim]Interrupted. Goodbye![/dim]")
         sys.exit(0)
 
 
-def _run_non_interactive(agent: AgentCore, prompt: str, max_turns: int) -> None:
-    """Run the agent in non-interactive mode for a single prompt."""
+def _run_non_interactive(agent: AgentCore, prompt: str) -> None:
+    """Run the agent in non-interactive mode.
+
+    run_turn() now handles full multi-turn tool chaining internally,
+    so a single call handles the entire prompt -> tool chain -> final answer.
+    """
     console: Console = Console()
     console.print(f"[bold blue]>[/bold blue] {prompt}")
-
-    for turn in range(max_turns):
-        response: str = agent.run_turn(prompt if turn == 0 else "")
-        console.print(f"[dim]Turn {turn + 1}:[/dim] {response}")
-
-        # If the agent didn't execute a tool (no follow-up), we're done
-        if "tool" not in response.lower():
-            break
+    response: str = agent.run_turn(prompt)
+    console.print(f"[bold green]Assistant[/bold green]: {response}")
 
 
 if __name__ == "__main__":
