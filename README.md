@@ -17,6 +17,14 @@ This agent is designed exclusively for models that run locally on the user's har
 - Context window planning targets 32K-128K tokens within GPU memory constraints
 - All dependencies (vector store, model serving, inference) are self-contained
 
+## Engineering Requirements
+
+All code must be built with testability in mind:
+- Comprehensive unit tests for every module
+- Clean separation of concerns (no monolithic files)
+- Modular architecture where each component has a single responsibility
+- Dependency injection where possible to enable mocking in tests
+
 ## Session Summary (May 21, 2026)
 
 1. Extracted a 574-page PDF textbook ("Agentic Architectural Patterns for Building Multi-Agent Systems") to markdown using pymupdf.
