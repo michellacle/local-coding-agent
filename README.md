@@ -2,7 +2,20 @@
 
 ## Project Goal
 
-Build a local-first, provider-agnostic coding agent grounded in proven agentic architectural patterns. The agent lives in the terminal, integrates deeply with git, supports multi-agent orchestration, and operates fully offline with local models. It aims to rival Claude Code and OpenCode in capability while giving users full control over models, tools, and data.
+Build a local-only coding agent grounded in proven agentic architectural patterns. The agent lives in the terminal, integrates deeply with git, supports multi-agent orchestration, and operates fully offline. It aims to rival Claude Code and OpenCode in capability while giving users full control over models, tools, and data.
+
+## Architectural Requirement: Local-Only Models
+
+This agent is designed exclusively for models that run locally on the user's hardware. No cloud LLM APIs. No external inference services. The entire stack must work offline.
+
+**Hardware assumption:** Users have access to up to 48GB of GPU VRAM (e.g., dual RTX 3090s, single A6000, or similar). This enables running models like Qwen 3.6 27B, Llama 3.3 70B (quantized), or Mistral Large (quantized) entirely on-device.
+
+**Implications:**
+- Embedding models must also run locally (e.g., nomic-embed-text via Ollama)
+- No fallback to cloud providers (OpenAI, Anthropic, etc.)
+- Model selection assumes FP16/INT8 quantized models fitting within 48GB VRAM
+- Context window planning targets 32K-128K tokens within GPU memory constraints
+- All dependencies (vector store, model serving, inference) are self-contained
 
 ## Session Summary (May 21, 2026)
 
