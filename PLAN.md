@@ -2,7 +2,7 @@
 
 **Based on:** PRODUCT_REQUIREMENTS.md v1.0
 **Date:** May 22, 2026
-**Status:** Phase 1-3 Complete — 629 tests passing
+**Status:** Phase 1-4 Complete — 719 tests passing
 
 ---
 
@@ -24,6 +24,11 @@
 | 10 | Non-interactive mode | __main__.py | Done — --prompt flag | 6 |
 | 11 | Multi-Agent | multi_agent.py | Done — delegate_agent, batch (up to 3 parallel) | 12 |
 | 12 | Memory | memory.py | Done — user profile + agent notes, CRUD, size limits | 10 |
+| 25 | Task Planner | task_planner.py | Done — goal decomposition, complexity estimation, plan save/load | 28 |
+| 26 | Complexity Routing | model_router.py | Done — routing rules, fallback chains, per-model stats | 18 |
+| 27 | Token Tracking | model_router.py | Done — prompt/completion tokens, latency, error counts | 18 |
+| 28 | Session Persistence | session_persist.py | Done — auto-save, restore on startup, session list | 15 |
+| 29 | Slash Commands | terminal_ui.py | Done — /models, /plan, /stats | — |
 | 13 | Skill Manager | skill_manager.py | Done — SKILL.md format, create/update/delete/list | 11 |
 | 14 | Human-in-the-Loop | human_loop.py | Done — multi-choice/open-ended prompts | 10 |
 | 15 | Adaptive Retry | retry.py | Done — exponential backoff, context-aware retry | 12 |
@@ -37,7 +42,7 @@
 | 23 | MCP Client | mcp_client.py | Done — stdio + HTTP MCP server support | 12 |
 | 24 | Vector Store (legacy) | vector_store.py | Done — cosine similarity, source filtering | 16 |
 
-**Total tests: 629 passed**
+**Total tests: 719 passed**
 
 ---
 
@@ -144,6 +149,22 @@
 15. ✅ Browser automation
 16. ✅ Cron jobs
 17. ✅ Configuration system expansion
+
+---
+
+## Phase 4 (Advanced Features) — ALL DONE
+
+### 25. Task Planner ✅
+**Status:** Complete — Goal decomposition via LLM, per-step complexity estimation (simple/moderate/complex), plan persistence (save/load/list), `/plan` slash command.
+
+### 26. Complexity-Based Routing + Fallback Chains ✅
+**Status:** Complete — RoutingRule maps complexity tiers to model configs, fallback chains try alternate providers on failure, token/latency stats per model.
+
+### 27. Session Persistence ✅
+**Status:** Complete — Auto-save conversation history after each turn, restore on next launch, session metadata (model, turn count, timestamps).
+
+### 28. Token Usage Tracking ✅
+**Status:** Complete — Prompt/completion token counting, latency tracking, error counts. Viewable via `/stats` slash command.
 
 ---
 

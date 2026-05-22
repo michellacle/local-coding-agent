@@ -149,6 +149,8 @@ class TerminalUI:
             "/tools": self._cmd_tools(),
             "/version": self._cmd_version(),
             "/models": self._cmd_models(args),
+            "/plan": self._cmd_plan(args),
+            "/stats": self._cmd_stats(),
         }
 
         if cmd in dispatch:
@@ -173,6 +175,9 @@ class TerminalUI:
           [yellow]/version[/yellow]       Show agent version info
           [yellow]/models[/yellow]        List available models from gateway & switch
           [yellow]/models N[/yellow]      Switch to model at index N
+          [yellow]/plan <goal>[/yellow]     Decompose a goal into actionable steps
+          [yellow]/plan list[/yellow]     List saved plans
+          [yellow]/stats[/yellow]         Show model routing stats & token usage
           [yellow]/quit, /exit[/yellow]    Exit the agent
 
         [bold]File Operations[/bold]
@@ -1005,6 +1010,137 @@ class TerminalUI:
             lines.append(f"  [{i}] {model_id}{marker}")
 
         lines.append(f"\n[dim]Type /models N to switch (e.g. /models 3)[/dim]")
+
+        return "\n".join(lines)
+
+    def _cmd_plan(self, args: str) -> str:
+        """Plan, list, and manage task plans.
+
+        Usage:
+          /plan <goal>          Decompose a goal into steps (calls LLM)
+          /plan list            List saved plans
+          /plan show <path>     Load and display a saved plan
+        """
+        if not args:
+            return textwrap.dedent("""\
+            [bold cyan]Task Planner[/bold cyan]
+
+            Usage:
+              [yellow]/plan <goal>[/yellow]       Decompose a goal into actionable steps
+              [yellow]/plan list[/yellow]        List saved plans
+              [yellow]/plan show <path>[/yellow]   Show a saved plan
+
+            Example:
+              /plan "Refactor the auth module to use JWT tokens"
+              /plan list""")
+
+        parts = args.split(maxsplit=1)
+        action = parts[0].lower()
+        query = parts[1] if len(parts) > 1 else ""
+
+        if action == "list":
+            return self._cmd_plan_list()
+        elif action == "show":
+            return self._cmd_plan_show(query)
+        else:
+            # Treat as a goal to plan
+            return self._cmd_plan_create(args)
+
+    def _cmd_plan_list(self) -> str:
+        """List all saved plans."""
+        try:
+            from local_agent.task_planner import TaskPlanner
+
+            planner = TaskPlanner(self.agent._router)
+            plans = planner.list_plans()
+
+            if not plans:
+                return "[dim]No saved plans found.[/dim]"
+
+            lines = ["[bold cyan]Saved Plans[/bold cyan]"]
+            for p in plans:
+                status = "[bold green]✓[/bold green]" if p["completed"] else "[dim]○[/dim]"
+                lines.append(f"  {status} {p['title']} [{p['steps']} steps] - {p['path']}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            return f"[dim]Could not list plans: {e}[/dim]"
+
+    def _cmd_plan_show(self, path: str) -> str:
+        """Show a saved plan."""
+        if not path:
+            return "[bold red]Error:[/bold red] Usage: /plan show <path>"
+
+        try:
+            from local_agent.task_planner import TaskPlanner, Plan
+
+            planner = TaskPlanner(self.agent._router)
+            plan = planner.load_plan(path)
+            return "[bold cyan]Plan[/bold cyan]\n" + plan.summary()
+        except FileNotFoundError:
+            return f"[bold red]Error:[/bold red] Plan not found: {path}"
+        except Exception as e:
+            return f"[dim]Could not load plan: {e}[/dim]"
+
+    def _cmd_plan_create(self, goal: str) -> str:
+        """Create a plan by decomposing a goal."""
+        try:
+            from local_agent.task_planner import TaskPlanner
+
+            planner = TaskPlanner(self.agent._router)
+            plan = planner.plan(goal)
+
+            # Auto-save
+            saved_path = planner.save_plan(plan)
+
+            complexity = planner.estimate_overall_complexity(plan)
+            complexity_label = {
+                "simple": "[green]simple[/green]",
+                "moderate": "[yellow]moderate[/yellow]",
+                "complex": "[red]complex[/red]",
+            }.get(complexity, complexity)
+
+            lines = [
+                f"[bold cyan]Plan Created[/bold cyan] [dim](complexity: {complexity_label})[/dim]",
+                plan.summary(),
+                f"\n[dim]Saved to: {saved_path}[/dim]",
+            ]
+
+            return "\n".join(lines)
+        except Exception as e:
+            return f"[bold red]Error:[/bold red] Could not create plan: {e}"
+
+    def _cmd_stats(self) -> str:
+        """Show routing stats / observability dashboard."""
+        try:
+            stats = self.agent._router.get_stats()
+        except Exception:
+            return "[dim]No stats available yet.[/dim]"
+
+        if not stats:
+            return "[dim]No stats available yet.[/dim]"
+
+        lines = ["[bold cyan]Model Routing Stats[/bold cyan]"]
+        lines.append("")
+        lines.append(f"  {'Model':<35} {'Requests':>8} {'Errors':>7} {'Latency':>8} {'Tokens':>10}")
+        lines.append("  " + "-" * 70)
+
+        total_requests = 0
+        total_errors = 0
+        total_tokens = 0
+
+        for model, s in sorted(stats.items()):
+            avg_lat = f"{s.avg_latency_ms:.0f}ms" if s.request_count > 0 else "—"
+            marker = " ◄ current" if model == self.config.llm.model else ""
+            lines.append(
+                f"  {model + marker:<35} {s.request_count:>8} {s.error_count:>7} {avg_lat:>8} {s.total_tokens:>10}"
+            )
+            total_requests += s.request_count
+            total_errors += s.error_count
+            total_tokens += s.total_tokens
+
+        lines.append("  " + "-" * 70)
+        lines.append(f"  {'TOTAL':<35} {total_requests:>8} {total_errors:>7} {'':>8} {total_tokens:>10}")
 
         return "\n".join(lines)
 
