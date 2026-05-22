@@ -30,7 +30,7 @@ class TerminalUI:
         self.agent = agent
         self.config = config
         self.console = Console()
-        self.prompt_prefix: str = "You"
+        self.prompt_prefix: str = "localcode"
         self.stop_phrase: str = "quit"
 
     def render_welcome(self) -> str:
@@ -38,7 +38,7 @@ class TerminalUI:
         lines: list[str] = [
             "[bold cyan]Local Coding Agent[/bold cyan]",
             f"Working directory: {self.config.work_dir}",
-            "Type your request or [bold]'quit'[/bold] to exit.",
+            "Type your request or [bold]'quit'[/bold] to exit. Use [bold]/help[/bold] for commands.",
         ]
         return "\n".join(lines)
 
@@ -79,6 +79,59 @@ class TerminalUI:
         """
         cleaned: str = raw_input.strip()
         return cleaned if cleaned else None
+
+    def render_help(self) -> str:
+        """Render help text showing available commands and usage."""
+        help_lines: list[str] = [
+            "[bold cyan]Local Coding Agent — Help[/bold cyan]",
+            "",
+            "[bold]Slash Commands:[/bold]",
+            "  [yellow]/help[/yellow]       Show this help message",
+            "  [yellow]/status[/yellow]     Show current session status",
+            "  [yellow]/quit[/yellow], [yellow]/exit[/yellow]  Exit the agent",
+            "",
+            "[bold]What I can do:[/bold]",
+            "  • [green]Read, write, and edit files[/green] in your project",
+            "  • [green]Search codebases[/green] (grep filenames and content)",
+            "  • [green]Run shell commands[/green] and scripts",
+            "  • [green]Manage git repos[/green] (init, add, commit, diff, status)",
+            "  • [green]Extract PDFs[/green] to markdown text",
+            "  • [green]Answer questions[/green] about your code and project",
+            "",
+            "[bold]Tips:[/bold]",
+            "  • Just describe what you want — I'll figure out the steps",
+            "  • I can chain multiple tools together automatically",
+            "  • If I need clarification, I'll ask before proceeding",
+        ]
+        return "\n".join(help_lines)
+
+    def is_special_command(self, user_input: str) -> bool:
+        """Check if the input is a special slash command."""
+        return user_input.startswith("/")
+
+    def handle_special_command(self, user_input: str) -> str | None:
+        """Handle a special slash command.
+
+        Returns:
+            Response string for the command, or None if it's not a known command.
+        """
+        cmd: str = user_input.strip().lower()
+
+        if cmd in ("/quit", "/exit"):
+            return None  # Signal to stop
+
+        if cmd == "/help":
+            return self.render_help()
+
+        if cmd == "/status":
+            lines: list[str] = []
+            lines.append(f"[bold cyan]Session Status[/bold cyan]")
+            lines.append(f"  Working directory: {self.config.work_dir}")
+            lines.append(f"  Model: {self.config.llm.model}")
+            lines.append(f"  Toolsets: {', '.join(self.config.toolsets)}")
+            return "\n".join(lines)
+
+        return f"[bold red]Unknown command:[/bold red] {user_input}"
 
     def should_stop(self, user_input: str) -> bool:
         """Check if the user wants to stop the agent.

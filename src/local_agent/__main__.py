@@ -19,6 +19,7 @@ from local_agent.tools.git_tools import git_init, git_add, git_commit, git_statu
 from local_agent.tools.search_tools import search_files, list_directory
 from local_agent.tools.human_loop import clarify, confirm, BlockingInteraction, ClarificationRequest, ApprovalRequest
 from local_agent.tools.memory_store import memory, memory_search, memory_list
+from local_agent.tools.skill_manage import skill_manage, skill_view, skills_list
 
 
 def register_tools(registry: ToolRegistry) -> None:
@@ -354,6 +355,96 @@ def register_tools(registry: ToolRegistry) -> None:
         fn=memory_list,
     )
 
+    registry.register(
+        schema=ToolSchema(
+            name="skill_manage",
+            description="Manage skills (create, update, delete, patch). Skills are procedural memory for reusable workflows.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "One of 'create', 'patch', 'edit', 'delete', 'write_file', 'remove_file'.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Skill name (lowercase, hyphens/underscores).",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full SKILL.md content. Required for 'create' and 'edit'.",
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "Text to find (required for 'patch').",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "Replacement text (required for 'patch').",
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace all occurrences (default: false).",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Category for organizing skills (create only).",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to a supporting file (write_file/remove_file).",
+                    },
+                    "file_content": {
+                        "type": "string",
+                        "description": "Content for write_file.",
+                    },
+                },
+                "required": ["action", "name"],
+            },
+        ),
+        fn=skill_manage,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="skill_view",
+            description="View a skill's content or a linked file.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Skill name.",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Optional path to a linked file.",
+                    },
+                },
+                "required": ["name"],
+            },
+        ),
+        fn=skill_view,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="skills_list",
+            description="List available skills with descriptions.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Optional category filter.",
+                    },
+                },
+                "required": [],
+            },
+        ),
+        fn=skills_list,
+    )
+
 
 def _handle_clarification(console: Console, req: ClarificationRequest) -> str:
     """Present a clarification question and collect the user's answer."""
@@ -453,13 +544,22 @@ def main() -> None:
     # Main loop — reset history between independent user turns
     try:
         while True:
-            raw: str = input(ui.render_input_prompt().replace("[", "").replace("]", ""))
+            raw: str = console.input(ui.render_input_prompt())
             cleaned: str | None = ui.process_input(raw)
             if cleaned is None:
                 continue
             if ui.should_stop(cleaned):
                 console.print("[dim]Goodbye![/dim]")
                 break
+
+            # Handle slash commands
+            if ui.is_special_command(cleaned):
+                cmd_response = ui.handle_special_command(cleaned)
+                if cmd_response is None:
+                    console.print("[dim]Goodbye![/dim]")
+                    break
+                console.print(cmd_response)
+                continue
 
             response: str = ui.run_turn(cleaned)
             console.print(ui.render_agent_response(response))
