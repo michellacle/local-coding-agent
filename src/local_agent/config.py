@@ -28,6 +28,59 @@ ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
 
 @dataclass
+class LLMConfig:
+    """Configuration for an LLM provider.
+
+    Attributes:
+        model: Model name to use.
+        host: Host/URL of the LLM server.
+        port: Port number (used if host doesn't start with http).
+        deterministic: Whether to use deterministic generation (temperature=0).
+    """
+
+    model: str = "qwen3.5:4b"
+    host: str = "localhost"
+    port: int = 11434
+    deterministic: bool = False
+
+    @property
+    def base_url(self) -> str:
+        """Build base URL from host and port."""
+        if self.host.startswith("http"):
+            return self.host
+        return f"http://{self.host}:{self.port}/v1"
+
+    @classmethod
+    def from_env(cls) -> "LLMConfig":
+        """Create LLMConfig from environment variables.
+
+        Reads LLM_MODEL, LLM_HOST, LLM_PORT, LLM_DETERMINISTIC env vars.
+
+        Returns:
+            LLMConfig instance with values from env or defaults.
+        """
+        return cls(
+            model=os.environ.get("LLM_MODEL", "qwen3.5:4b"),
+            host=os.environ.get("LLM_HOST", "localhost"),
+            port=int(os.environ.get("LLM_PORT", "11434")),
+            deterministic=os.environ.get("LLM_DETERMINISTIC", "").lower() in ("1", "true"),
+        )
+
+
+@dataclass
+class AppConfig:
+    """Top-level application configuration.
+
+    Attributes:
+        work_dir: Working directory for the agent.
+        llm: LLM provider configuration.
+    """
+
+    work_dir: Any  # Path
+    llm: LLMConfig = field(default_factory=LLMConfig)
+
+
+@dataclass
 class ConfigSource:
     """A configuration source.
 
