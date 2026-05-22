@@ -1,267 +1,295 @@
-"""Tests for explainability — AuditLog, ActionTimer, ExplanationGenerator."""
+"""Tests for explainability — AuditLogger, DecisionRecord, ChainOfThought, SelfAssessment."""
 
+import json
 import time
+from pathlib import Path
 
 import pytest
 
 from local_agent.explainability import (
-    AuditLog,
     AuditEntry,
-    ActionTimer,
-    ExplanationGenerator,
+    AuditLogger,
+    ChainOfThought,
+    ConfidenceLevel,
+    DecisionRecord,
+    DecisionType,
+    SelfAssessment,
 )
 
 
-class TestAuditLog:
-    """Test AuditLog operations."""
+class TestDecisionRecord:
+    """Test DecisionRecord dataclass."""
 
-    def test_log_creates_entry(self):
-        log = AuditLog()
-        entry = log.log("tool_call", "read_file: config.yaml")
-        assert entry.action == "tool_call"
-        assert entry.description == "read_file: config.yaml"
-        assert entry.status == "success"
-        assert entry.timestamp > 0
-
-    def test_log_with_details(self):
-        log = AuditLog()
-        entry = log.log(
-            "tool_call",
-            "read_file: config.yaml",
-            details={"path": "config.yaml", "lines": 50},
+    def test_create_decision(self):
+        record = DecisionRecord(
+            decision_type=DecisionType.TOOL_CALL,
+            action="terminal: ls -la",
+            reasoning="Need to list files in directory",
+            confidence=ConfidenceLevel.HIGH,
         )
-        assert entry.details["path"] == "config.yaml"
+        assert record.decision_type == DecisionType.TOOL_CALL
+        assert record.action == "terminal: ls -la"
+        assert record.confidence == ConfidenceLevel.HIGH
 
-    def test_log_with_confidence(self):
-        log = AuditLog()
-        entry = log.log(
-            "recommendation",
-            "Use pytest for testing",
-            confidence=0.85,
+    def test_decision_to_dict(self):
+        record = DecisionRecord(
+            decision_type=DecisionType.CODE_GENERATION,
+            action="create function",
+            reasoning="User requested a new function",
         )
-        assert entry.confidence == pytest.approx(0.85)
+        d = record.to_dict()
+        assert d["decision_type"] == "code_generation"
+        assert d["confidence"] == "medium"
+        assert d["action"] == "create function"
 
-    def test_log_error_status(self):
-        log = AuditLog()
-        entry = log.log("tool_call", "run tests", status="error")
-        assert entry.status == "error"
+    def test_decision_to_json(self):
+        record = DecisionRecord(action="test")
+        j = record.to_json()
+        parsed = json.loads(j)
+        assert parsed["action"] == "test"
 
-    def test_entries_returns_all(self):
-        log = AuditLog()
-        log.log("a", "first")
-        log.log("b", "second")
-        log.log("c", "third")
-        assert len(log.entries()) == 3
+    def test_decision_auto_id(self):
+        r1 = DecisionRecord()
+        r2 = DecisionRecord()
+        assert r1.decision_id != r2.decision_id
 
-    def test_recent_returns_last_n(self):
-        log = AuditLog()
-        for i in range(20):
-            log.log("action", f"entry {i}")
-        recent = log.recent(count=5)
-        assert len(recent) == 5
-        assert "entry 19" in recent[-1].description
+
+class TestChainOfThought:
+    """Test ChainOfThought dataclass."""
+
+    def test_create_chain(self):
+        chain = ChainOfThought(steps=["Step 1", "Step 2"], conclusion="Done")
+        assert len(chain.steps) == 2
+        assert chain.conclusion == "Done"
+
+    def test_add_step(self):
+        chain = ChainOfThought()
+        chain.add_step("First")
+        chain.add_step("Second")
+        assert len(chain.steps) == 2
+        assert chain.steps[0] == "First"
+
+    def test_chain_to_dict(self):
+        chain = ChainOfThought(steps=["A", "B"], conclusion="C")
+        d = chain.to_dict()
+        assert d["steps"] == ["A", "B"]
+        assert d["conclusion"] == "C"
+
+
+class TestAuditEntry:
+    """Test AuditEntry dataclass."""
+
+    def test_create_entry(self):
+        entry = AuditEntry(event_type="tool_call", input="ls", output="file.txt")
+        assert entry.event_type == "tool_call"
+        assert entry.input == "ls"
+
+    def test_entry_to_dict_with_decision(self):
+        decision = DecisionRecord(action="test")
+        entry = AuditEntry(decision=decision)
+        d = entry.to_dict()
+        assert d["decision"]["action"] == "test"
+
+    def test_entry_to_dict_with_chain(self):
+        chain = ChainOfThought(steps=["step1"], conclusion="done")
+        entry = AuditEntry(chain_of_thought=chain)
+        d = entry.to_dict()
+        assert d["chain_of_thought"]["steps"] == ["step1"]
+
+
+class TestAuditLogger:
+    """Test AuditLogger functionality."""
+
+    def test_log_decision(self):
+        logger = AuditLogger()
+        record = logger.log_decision(
+            decision_type=DecisionType.TOOL_CALL,
+            action="ls -la",
+            reasoning="List files",
+            confidence=ConfidenceLevel.HIGH,
+        )
+        assert record.action == "ls -la"
+        assert len(logger.get_decisions()) == 1
+
+    def test_log_chain_of_thought(self):
+        logger = AuditLogger()
+        chain = logger.log_chain_of_thought(
+            steps=["Analyze input", "Choose approach", "Execute"],
+            conclusion="Approach chosen",
+        )
+        assert len(chain.steps) == 3
+        assert len(logger.get_chains()) == 1
+
+    def test_log_tool_call(self):
+        logger = AuditLogger()
+        entry = logger.log_tool_call(
+            tool_name="terminal",
+            arguments={"command": "ls"},
+            result="file1.txt",
+        )
+        assert entry.event_type == "tool_call"
+        assert entry.metadata["tool_name"] == "terminal"
+
+    def test_log_error(self):
+        logger = AuditLogger()
+        entry = logger.log_error(
+            error_type="timeout",
+            error_message="Connection timed out",
+        )
+        assert entry.event_type == "error.timeout"
+
+    def test_log_state_snapshot(self):
+        logger = AuditLogger()
+        entry = logger.log_state_snapshot(
+            {"tokens_used": 1000, "model": "qwen3.5:4b"}
+        )
+        assert entry.event_type == "state_snapshot"
+        assert entry.agent_state["model"] == "qwen3.5:4b"
+
+    def test_get_entries_filter(self):
+        logger = AuditLogger()
+        logger.log_decision(DecisionType.TOOL_CALL, "ls", "list files")
+        logger.log_tool_call("terminal", {"command": "ls"}, "output")
+        logger.log_error("timeout", "timeout")
+
+        entries = logger.get_entries(event_type="tool_call")
+        assert len(entries) == 1
+        assert entries[0].event_type == "tool_call"
+
+    def test_get_summary(self):
+        logger = AuditLogger()
+        logger.log_decision(DecisionType.TOOL_CALL, "ls", "list")
+        logger.log_decision(DecisionType.CODE_GENERATION, "write", "create")
+        logger.log_tool_call("terminal", {"command": "ls"}, "out")
+
+        summary = logger.get_summary()
+        assert summary["total_entries"] == 3
+        assert summary["total_decisions"] == 2
 
     def test_clear(self):
-        log = AuditLog()
-        log.log("a", "first")
-        log.clear()
-        assert len(log.entries()) == 0
+        logger = AuditLogger()
+        logger.log_decision(DecisionType.TOOL_CALL, "ls", "list")
+        logger.clear()
+        assert len(logger.get_entries()) == 0
 
-    def test_export_json(self):
-        log = AuditLog()
-        log.log("tool_call", "test", details={"key": "value"}, confidence=0.9)
+    def test_persistent_log(self, tmp_path):
+        log_file = tmp_path / "audit.log"
+        logger = AuditLogger(log_path=str(log_file))
+        logger.log_decision(DecisionType.TOOL_CALL, "ls", "list files")
+        del logger
 
-        json_str = log.export_json()
-        assert "tool_call" in json_str
-        assert "test" in json_str
-        assert "key" in json_str
+        # Reopen
+        logger2 = AuditLogger(log_path=str(log_file))
+        entries = logger2.get_entries()
+        assert len(entries) >= 1
 
-        # Verify it's valid JSON
-        import json
-        data = json.loads(json_str)
-        assert isinstance(data, list)
-        assert len(data) == 1
+    def test_export_json(self, tmp_path):
+        logger = AuditLogger()
+        logger.log_decision(DecisionType.TOOL_CALL, "ls", "list")
+        export_path = str(tmp_path / "export.json")
+        logger.export_json(export_path)
 
-    def test_summary_contains_counts(self):
-        log = AuditLog()
-        log.log("tool_call", "read")
-        log.log("tool_call", "write")
-        log.log("llm_call", "response")
+        data = json.loads(Path(export_path).read_text())
+        assert "entries" in data
+        assert "summary" in data
+        assert len(data["entries"]) == 1
 
-        summary = log.summary()
-        assert "tool_call: 2" in summary
-        assert "llm_call: 1" in summary
-        assert "Total actions: 3" in summary
-
-    def test_summary_shows_session_duration(self):
-        log = AuditLog()
-        log.log("tool_call", "read")
-        summary = log.summary()
-        assert "Session duration:" in summary
-
-    def test_summary_shows_errors(self):
-        log = AuditLog()
-        log.log("tool_call", "read", status="success")
-        log.log("tool_call", "write", status="error")
-        summary = log.summary()
-        assert "Errors: 1" in summary
-
-    def test_summary_shows_confidence(self):
-        log = AuditLog()
-        log.log("recommendation", "use pytest", confidence=0.8)
-        log.log("recommendation", "use mypy", confidence=0.9)
-        summary = log.summary()
-        assert "Average confidence:" in summary
-
-    def test_summary_recent_actions(self):
-        log = AuditLog()
-        log.log("tool_call", "read_file")
-        summary = log.summary()
-        assert "read_file" in summary
-
-
-class TestActionTimer:
-    """Test ActionTimer context manager."""
-
-    def test_logs_action_with_timing(self):
-        log = AuditLog()
-        with log.log_action("tool_call", "read config.yaml", {"path": "config.yaml"}) as timer:
-            time.sleep(0.05)  # 50ms
-
-        entries = log.entries()
-        assert len(entries) == 1
-        assert entries[0].action == "tool_call"
-        assert entries[0].duration_ms >= 40  # at least ~40ms
-
-    def test_timer_success_status(self):
-        log = AuditLog()
-        with log.log_action("tool_call", "read"):
-            pass
-
-        assert log.entries()[0].status == "success"
-
-    def test_timer_error_status(self):
-        log = AuditLog()
-        try:
-            with log.log_action("tool_call", "read"):
-                raise ValueError("file not found")
-        except ValueError:
-            pass
-
-        entry = log.entries()[0]
-        assert entry.status == "error"
-        assert "file not found" in str(entry.details.get("exception"))
-
-    def test_timer_reference(self):
-        log = AuditLog()
-        with log.log_action("tool_call", "read") as timer:
-            pass
-
-        assert timer.entry is not None
-        assert timer.entry.action == "tool_call"
-
-
-class TestExplanationGenerator:
-    """Test ExplanationGenerator."""
-
-    gen = ExplanationGenerator()
-
-    def test_explain_read_file(self):
-        expl = self.gen.explain_tool_call("read_file", {"path": "config.yaml"})
-        assert "config.yaml" in expl
-
-    def test_explain_write_file(self):
-        expl = self.gen.explain_tool_call("write_file", {"path": "new.py"})
-        assert "new.py" in expl
-
-    def test_explain_execute_command(self):
-        expl = self.gen.explain_tool_call(
-            "execute_command", {"command": "npm install"}
+    def test_log_decision_with_context(self):
+        logger = AuditLogger()
+        record = logger.log_decision(
+            decision_type=DecisionType.FILE_EDIT,
+            action="patch file.py",
+            reasoning="Fix bug",
+            context={"file": "file.py", "line": 42},
         )
-        assert "npm install" in expl
+        assert record.context["file"] == "file.py"
 
-    def test_explain_background_command(self):
-        expl = self.gen.explain_tool_call(
-            "execute_command", {"command": "npm test", "background": True}
+    def test_log_decision_with_alternatives(self):
+        logger = AuditLogger()
+        record = logger.log_decision(
+            decision_type=DecisionType.TOOL_CALL,
+            action="grep pattern",
+            reasoning="Best approach",
+            alternatives=["awk", "sed"],
         )
-        assert "background" in expl
+        assert record.alternatives == ["awk", "sed"]
 
-    def test_explain_git_commit(self):
-        expl = self.gen.explain_tool_call(
-            "git_commit", {"message": "fix: typo"}
+    def test_get_entries_limit(self):
+        logger = AuditLogger()
+        for i in range(10):
+            logger.log_decision(DecisionType.TOOL_CALL, f"cmd{i}", f"reason{i}")
+        entries = logger.get_entries(limit=5)
+        assert len(entries) == 5
+
+    def test_export_json_clear(self, tmp_path):
+        log_file = tmp_path / "audit.log"
+        logger = AuditLogger(log_path=str(log_file))
+        logger.log_decision(DecisionType.TOOL_CALL, "ls", "list")
+        logger.clear()
+        assert len(logger.get_entries()) == 0
+
+
+class TestSelfAssessment:
+    """Test SelfAssessment functionality."""
+
+    def test_assess_code_has_comments(self):
+        code = """# This is a comment\ndef hello():\n    print("hi")\n"""
+        result = SelfAssessment.assess_code(code)
+        assert result["has_comments"] is True
+        assert result["language"] == "python"
+
+    def test_assess_code_has_error_handling(self):
+        code = """try:\n    do_thing()\nexcept Exception:\n    pass\n"""
+        result = SelfAssessment.assess_code(code)
+        assert result["has_error_handling"] is True
+
+    def test_assess_code_has_logging(self):
+        code = "print('debug')\n"
+        result = SelfAssessment.assess_code(code)
+        assert result["has_logging"] is True
+
+    def test_assess_code_line_count(self):
+        code = "a = 1\nb = 2\nc = 3\n"
+        result = SelfAssessment.assess_code(code)
+        assert result["line_count"] == 3
+
+    def test_assess_code_meets_criteria(self):
+        code = "def my_function(): pass\n"
+        result = SelfAssessment.assess_code(
+            code, criteria={"has_def": "def", "has_pass": "pass"}
         )
-        assert "fix: typo" in expl
+        assert result["meets_criteria"]["has_def"] is True
+        assert result["meets_criteria"]["has_pass"] is True
 
-    def test_explain_unknown_tool(self):
-        expl = self.gen.explain_tool_call("custom_tool", {"a": 1})
-        assert "custom_tool" in expl
+    def test_assess_code_no_criteria(self):
+        code = "x = 1\n"
+        result = SelfAssessment.assess_code(code)
+        assert result["meets_criteria"] == {}
 
-    def test_explain_error(self):
-        expl = self.gen.explain_error("read_file", "No such file")
-        assert "read_file" in expl
-        assert "No such file" in expl
+    def test_assess_response_word_count(self):
+        result = SelfAssessment.assess_response("hello world foo bar")
+        assert result["word_count"] == 4
 
-    def test_explain_error_truncation(self):
-        long_error = "x" * 500
-        expl = self.gen.explain_error("tool", long_error)
-        # Should be truncated to 200 chars
-        assert "x" * 201 not in expl
+    def test_assess_response_has_headings(self):
+        result = SelfAssessment.assess_response("# Title\nSome text\n")
+        assert result["has_headings"] is True
 
-    def test_explain_llm_with_tool_call(self):
-        expl = self.gen.explain_llm_response(
-            '{"tool": "read_file", "args": {}}',
-            has_tool_call=True,
-        )
-        assert "tool call" in expl
+    def test_assess_response_has_lists(self):
+        result = SelfAssessment.assess_response("- Item 1\n- Item 2\n")
+        assert result["has_lists"] is True
 
-    def test_explain_llm_plain_text(self):
-        expl = self.gen.explain_llm_response(
-            "The answer is 42.",
-            has_tool_call=False,
-        )
-        assert "42" in expl
+    def test_assess_response_has_code_blocks(self):
+        result = SelfAssessment.assess_response("Here is code:\n```python\nx = 1\n```\n")
+        assert result["has_code_blocks"] is True
 
-    def test_explain_llm_with_tokens(self):
-        expl = self.gen.explain_llm_response(
-            "Hello",
-            has_tool_call=False,
-            tokens_used=150,
-        )
-        assert "150" in expl
+    def test_assess_response_has_references(self):
+        result = SelfAssessment.assess_response("See README.md for more info.")
+        assert result["has_references"] is True
 
-    def test_explain_llm_truncates_long_response(self):
-        expl = self.gen.explain_llm_response(
-            "x" * 500,
-            has_tool_call=False,
-        )
-        assert "..." in expl
+    def test_assess_response_completeness(self):
+        result = SelfAssessment.assess_response(" " * 10)
+        assert result["completeness_score"] <= 1.0
 
-    def test_explain_search_files(self):
-        expl = self.gen.explain_tool_call(
-            "search_files", {"pattern": "def main"}
-        )
-        assert "def main" in expl
-
-    def test_explain_git_merge(self):
-        expl = self.gen.explain_tool_call(
-            "git_merge", {"branch": "feature-1"}
-        )
-        assert "feature-1" in expl
-
-    def test_explain_delegate_task(self):
-        expl = self.gen.explain_tool_call(
-            "delegate_task", {"goal": "Write tests for the auth module"}
-        )
-        assert "Write tests" in expl
-
-    def test_explain_git_branch_delete(self):
-        expl = self.gen.explain_tool_call(
-            "git_branch", {"branch_name": "old", "delete": True}
-        )
-        assert "Deleting" in expl
-
-    def test_explain_git_branch_create(self):
-        expl = self.gen.explain_tool_call(
-            "git_branch", {"branch_name": "new", "delete": False}
-        )
-        assert "Creating" in expl
+    def test_assess_empty_code(self):
+        result = SelfAssessment.assess_code("")
+        assert result["indentation_level"] == 0

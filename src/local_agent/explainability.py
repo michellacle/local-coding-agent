@@ -1,305 +1,501 @@
-"""Explainability & Audit Trail — track agent actions with explanations and timestamps.
+"""Explainability and audit trail for agent actions.
 
 Provides:
-- Action explanations before tool execution
-- Session audit log (all actions, timestamps, results)
-- Confidence scores for recommendations
-- Session summary at end
+- Decision logging (why the agent chose a specific action)
+- Chain-of-thought recording
+- Action confidence scoring
+- Audit trail with timestamps and context
+- Self-assessment of outputs
 """
 
 from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass, field, asdict
+from enum import Enum
+from pathlib import Path
 from typing import Any
+
+
+class DecisionType(str, Enum):
+    """Types of decisions an agent can make."""
+
+    TOOL_CALL = "tool_call"
+    CODE_GENERATION = "code_generation"
+    FILE_EDIT = "file_edit"
+    TERMINAL_COMMAND = "terminal_command"
+    REASONING = "reasoning"
+    FALLBACK = "fallback"
+    ERROR_RECOVERY = "error_recovery"
+
+
+class ConfidenceLevel(str, Enum):
+    """Confidence levels for agent decisions."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    UNCERTAIN = "uncertain"
+
+
+@dataclass
+class DecisionRecord:
+    """A single decision made by the agent.
+
+    Attributes:
+        decision_id: Unique identifier for this decision.
+        timestamp: When the decision was made.
+        decision_type: Type of decision.
+        action: What action was taken.
+        reasoning: Why this action was chosen.
+        alternatives: Other options considered.
+        confidence: Confidence level in this decision.
+        context: Additional context (inputs, state, etc.).
+        outcome: Result of the action (filled in after execution).
+    """
+
+    decision_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    timestamp: float = field(default_factory=time.time)
+    decision_type: DecisionType = DecisionType.REASONING
+    action: str = ""
+    reasoning: str = ""
+    alternatives: list[str] = field(default_factory=list)
+    confidence: ConfidenceLevel = ConfidenceLevel.MEDIUM
+    context: dict[str, Any] = field(default_factory=dict)
+    outcome: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to serializable dict."""
+        d = asdict(self)
+        d["decision_type"] = self.decision_type.value
+        d["confidence"] = self.confidence.value
+        return d
+
+    def to_json(self) -> str:
+        """Convert to JSON string."""
+        return json.dumps(self.to_dict(), indent=2, default=str)
+
+
+@dataclass
+class ChainOfThought:
+    """A chain of reasoning steps.
+
+    Attributes:
+        chain_id: Unique identifier for this chain.
+        steps: Ordered list of reasoning steps.
+        conclusion: Final conclusion drawn from the chain.
+        timestamp: When the chain was created.
+    """
+
+    chain_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    steps: list[str] = field(default_factory=list)
+    conclusion: str = ""
+    timestamp: float = field(default_factory=time.time)
+
+    def add_step(self, step: str) -> None:
+        """Add a reasoning step."""
+        self.steps.append(step)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to serializable dict."""
+        return asdict(self)
 
 
 @dataclass
 class AuditEntry:
-    """A single entry in the audit log.
+    """An entry in the audit trail.
 
     Attributes:
-        timestamp: Unix timestamp when the action occurred.
-        action: Type of action (tool_call, llm_call, user_input, error, etc.).
-        description: Human-readable explanation of what happened.
-        details: Structured details about the action.
-        duration_ms: How long the action took (milliseconds).
-        status: Outcome status (success, error, partial).
-        confidence: Confidence score [0.0, 1.0] if applicable.
+        entry_id: Unique identifier.
+        timestamp: When the event occurred.
+        event_type: Type of event.
+        agent_state: Snapshot of agent state at the time.
+        input: Input that triggered the event.
+        output: Output produced by the event.
+        decision: Associated decision record (if any).
+        chain_of_thought: Associated reasoning chain (if any).
+        metadata: Additional metadata.
     """
 
-    timestamp: float
-    action: str
-    description: str
-    details: dict[str, Any] = field(default_factory=dict)
-    duration_ms: float = 0.0
-    status: str = "success"
-    confidence: float | None = None
+    entry_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    timestamp: float = field(default_factory=time.time)
+    event_type: str = ""
+    agent_state: dict[str, Any] = field(default_factory=dict)
+    input: str = ""
+    output: str = ""
+    decision: DecisionRecord | None = None
+    chain_of_thought: ChainOfThought | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to serializable dict."""
+        d = asdict(self)
+        if self.decision:
+            d["decision"] = self.decision.to_dict()
+        if self.chain_of_thought:
+            d["chain_of_thought"] = self.chain_of_thought.to_dict()
+        return d
 
 
-class AuditLog:
-    """Session audit log that records all agent actions.
+class AuditLogger:
+    """Logger that records agent actions to an audit trail.
 
-    Entries are stored in-memory during the session and can be
-    exported as JSON or a human-readable summary.
+    Writes entries to a JSON Lines file for persistence.
     """
 
-    def __init__(self) -> None:
-        self._entries: list[AuditEntry] = []
-        self._session_start = time.time()
-
-    def log(
-        self,
-        action: str,
-        description: str,
-        details: dict[str, Any] | None = None,
-        status: str = "success",
-        confidence: float | None = None,
-    ) -> AuditEntry:
-        """Add an entry to the audit log.
+    def __init__(self, log_path: str | None = None):
+        """Initialize the audit logger.
 
         Args:
-            action: Type of action (tool_call, llm_call, etc.).
-            description: Human-readable explanation.
-            details: Optional structured details.
-            status: Outcome status.
-            confidence: Optional confidence score.
+            log_path: Optional path to JSON Lines log file.
+        """
+        self._log_path = log_path
+        self._entries: list[AuditEntry] = []
+        self._decisions: list[DecisionRecord] = []
+        self._chains: list[ChainOfThought] = []
+
+        if log_path:
+            log_file = Path(log_path)
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            # Load existing entries if file exists
+            if log_file.exists():
+                self._load_entries(log_file)
+
+    def _load_entries(self, path: Path) -> None:
+        """Load existing audit entries from file."""
+        for line in path.read_text().strip().split("\n"):
+            if line.strip():
+                try:
+                    data = json.loads(line)
+                    entry = AuditEntry(**{k: v for k, v in data.items() if k != "decision" and k != "chain_of_thought"})
+                    self._entries.append(entry)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+    def log_decision(
+        self,
+        decision_type: DecisionType,
+        action: str,
+        reasoning: str,
+        confidence: ConfidenceLevel = ConfidenceLevel.MEDIUM,
+        alternatives: list[str] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> DecisionRecord:
+        """Log a decision made by the agent.
+
+        Args:
+            decision_type: Type of decision.
+            action: Action taken.
+            reasoning: Why this action was chosen.
+            confidence: Confidence level.
+            alternatives: Other options considered.
+            context: Additional context.
+
+        Returns:
+            The created DecisionRecord.
+        """
+        record = DecisionRecord(
+            decision_type=decision_type,
+            action=action,
+            reasoning=reasoning,
+            confidence=confidence,
+            alternatives=alternatives or [],
+            context=context or {},
+        )
+        self._decisions.append(record)
+
+        entry = AuditEntry(
+            event_type=f"decision.{decision_type.value}",
+            input=json.dumps(context or {}),
+            output=action,
+            decision=record,
+        )
+        self._append_entry(entry)
+
+        return record
+
+    def log_chain_of_thought(
+        self,
+        steps: list[str],
+        conclusion: str,
+    ) -> ChainOfThought:
+        """Log a chain of reasoning.
+
+        Args:
+            steps: Ordered reasoning steps.
+            conclusion: Final conclusion.
+
+        Returns:
+            The created ChainOfThought.
+        """
+        chain = ChainOfThought(steps=steps, conclusion=conclusion)
+        self._chains.append(chain)
+
+        entry = AuditEntry(
+            event_type="reasoning.chain",
+            output=conclusion,
+            chain_of_thought=chain,
+        )
+        self._append_entry(entry)
+
+        return chain
+
+    def log_tool_call(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: str = "",
+        decision: DecisionRecord | None = None,
+    ) -> AuditEntry:
+        """Log a tool call.
+
+        Args:
+            tool_name: Name of the tool called.
+            arguments: Arguments passed to the tool.
+            result: Result of the tool call.
+            decision: Associated decision record.
 
         Returns:
             The created AuditEntry.
         """
         entry = AuditEntry(
-            timestamp=time.time(),
-            action=action,
-            description=description,
-            details=details or {},
-            status=status,
-            confidence=confidence,
+            event_type="tool_call",
+            input=json.dumps(arguments, default=str),
+            output=result,
+            decision=decision,
+            metadata={"tool_name": tool_name},
         )
-        self._entries.append(entry)
+        self._append_entry(entry)
         return entry
 
-    def log_action(
+    def log_error(
         self,
-        action: str,
-        description: str,
-        details: dict[str, Any] | None = None,
-    ) -> ActionTimer:
-        """Start timing an action. Use as a context manager.
+        error_type: str,
+        error_message: str,
+        context: dict[str, Any] | None = None,
+    ) -> AuditEntry:
+        """Log an error event.
 
         Args:
-            action: Type of action.
-            description: Human-readable explanation.
-            details: Optional structured details.
+            error_type: Type of error.
+            error_message: Error message.
+            context: Additional context.
 
         Returns:
-            An ActionTimer context manager.
+            The created AuditEntry.
         """
-        return ActionTimer(self, action, description, details or {})
+        entry = AuditEntry(
+            event_type=f"error.{error_type}",
+            input=error_message,
+            metadata=context or {},
+        )
+        self._append_entry(entry)
+        return entry
 
-    def entries(self) -> list[AuditEntry]:
-        """Return all audit entries."""
-        return list(self._entries)
+    def log_state_snapshot(self, state: dict[str, Any]) -> AuditEntry:
+        """Log an agent state snapshot.
 
-    def recent(self, count: int = 10) -> list[AuditEntry]:
-        """Return the most recent N entries."""
-        return list(self._entries[-count:])
+        Args:
+            state: Current agent state.
+
+        Returns:
+            The created AuditEntry.
+        """
+        entry = AuditEntry(
+            event_type="state_snapshot",
+            agent_state=state,
+        )
+        self._append_entry(entry)
+        return entry
+
+    def _append_entry(self, entry: AuditEntry) -> None:
+        """Append an entry to the log."""
+        self._entries.append(entry)
+
+        if self._log_path:
+            with open(self._log_path, "a") as f:
+                f.write(json.dumps(entry.to_dict(), default=str) + "\n")
+
+    def get_entries(
+        self,
+        event_type: str | None = None,
+        limit: int = 100,
+    ) -> list[AuditEntry]:
+        """Get audit entries, optionally filtered by event type.
+
+        Args:
+            event_type: Filter by event type (supports prefix matching).
+            limit: Maximum number of entries.
+
+        Returns:
+            List of matching AuditEntry objects.
+        """
+        entries = self._entries
+
+        if event_type:
+            entries = [e for e in entries if e.event_type.startswith(event_type)]
+
+        return entries[-limit:]
+
+    def get_decisions(self) -> list[DecisionRecord]:
+        """Get all logged decisions."""
+        return self._decisions[:]
+
+    def get_chains(self) -> list[ChainOfThought]:
+        """Get all logged chains of thought."""
+        return self._chains[:]
+
+    def get_summary(self) -> dict[str, Any]:
+        """Get a summary of the audit trail.
+
+        Returns:
+            Dict with counts and stats.
+        """
+        event_counts: dict[str, int] = {}
+        for entry in self._entries:
+            base = entry.event_type.split(".")[0]
+            event_counts[base] = event_counts.get(base, 0) + 1
+
+        confidence_counts: dict[str, int] = {}
+        for decision in self._decisions:
+            confidence_counts[decision.confidence.value] = (
+                confidence_counts.get(decision.confidence.value, 0) + 1
+            )
+
+        return {
+            "total_entries": len(self._entries),
+            "total_decisions": len(self._decisions),
+            "total_chains": len(self._chains),
+            "event_counts": event_counts,
+            "confidence_distribution": confidence_counts,
+        }
+
+    def export_json(self, path: str) -> None:
+        """Export the full audit trail as a JSON file.
+
+        Args:
+            path: Output file path.
+        """
+        data = {
+            "entries": [e.to_dict() for e in self._entries],
+            "summary": self.get_summary(),
+        }
+        Path(path).write_text(json.dumps(data, indent=2, default=str))
 
     def clear(self) -> None:
         """Clear all entries."""
         self._entries.clear()
+        self._decisions.clear()
+        self._chains.clear()
 
-    def export_json(self) -> str:
-        """Export the audit log as formatted JSON."""
-        data = []
-        for entry in self._entries:
-            data.append({
-                "timestamp": entry.timestamp,
-                "action": entry.action,
-                "description": entry.description,
-                "details": entry.details,
-                "duration_ms": entry.duration_ms,
-                "status": entry.status,
-                "confidence": entry.confidence,
-            })
-        return json.dumps(data, indent=2)
-
-    def summary(self) -> str:
-        """Generate a human-readable session summary.
-
-        Returns:
-            Formatted text summary of the session.
-        """
-        lines: list[str] = []
-        lines.append("=" * 60)
-        lines.append("SESSION AUDIT SUMMARY")
-        lines.append("=" * 60)
-
-        session_duration = time.time() - self._session_start
-        lines.append(f"Session duration: {session_duration:.1f}s")
-        lines.append(f"Total actions: {len(self._entries)}")
-        lines.append("")
-
-        # Count by action type
-        action_counts: dict[str, int] = {}
-        error_count = 0
-        for entry in self._entries:
-            action_counts[entry.action] = action_counts.get(entry.action, 0) + 1
-            if entry.status == "error":
-                error_count += 1
-
-        lines.append("Actions by type:")
-        for action, count in sorted(action_counts.items()):
-            lines.append(f"  {action}: {count}")
-
-        if error_count > 0:
-            lines.append(f"\nErrors: {error_count}")
-
-        # Average confidence
-        confidences = [e.confidence for e in self._entries if e.confidence is not None]
-        if confidences:
-            avg_conf = sum(confidences) / len(confidences)
-            lines.append(f"Average confidence: {avg_conf:.2f}")
-
-        lines.append("")
-
-        # Last N entries
-        lines.append("Recent actions:")
-        for entry in self._entries[-10:]:
-            time_str = time.strftime(
-                "%H:%M:%S", time.localtime(entry.timestamp)
-            )
-            status_icon = "✓" if entry.status == "success" else "✗"
-            dur = f" ({entry.duration_ms:.0f}ms)" if entry.duration_ms > 0 else ""
-            lines.append(
-                f"  [{time_str}] {status_icon} {entry.action}: {entry.description}{dur}"
-            )
-
-        lines.append("=" * 60)
-        return "\n".join(lines)
+        if self._log_path:
+            Path(self._log_path).write_text("")
 
 
-class ActionTimer:
-    """Context manager that logs an action with timing.
+class SelfAssessment:
+    """Self-assessment of agent outputs.
 
-    Usage:
-        with audit.log_action("tool_call", "read_file: config.yaml") as timer:
-            # do work
-            pass
-        # timer.entry has duration_ms set
+    Evaluates quality, completeness, and correctness of generated content.
     """
 
-    def __init__(
-        self,
-        audit_log: AuditLog,
-        action: str,
-        description: str,
-        details: dict[str, Any],
-    ) -> None:
-        self._audit = audit_log
-        self._action = action
-        self._description = description
-        self._details = details
-        self._start = time.time()
-        self.entry: AuditEntry | None = None
-
-    def __enter__(self) -> ActionTimer:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        duration_ms = (time.time() - self._start) * 1000
-        status = "error" if exc_type is not None else "success"
-        self._details["exception"] = str(exc_val) if exc_val else None
-
-        self.entry = self._audit.log(
-            action=self._action,
-            description=self._description,
-            details=self._details,
-            status=status,
-        )
-        self.entry.duration_ms = duration_ms
-
-
-class ExplanationGenerator:
-    """Generate human-readable explanations for agent actions."""
-
     @staticmethod
-    def explain_tool_call(tool_name: str, args: dict[str, Any]) -> str:
-        """Generate an explanation for a tool call.
+    def assess_code(
+        code: str,
+        language: str = "python",
+        criteria: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Assess the quality of generated code.
 
         Args:
-            tool_name: Name of the tool being called.
-            args: Arguments being passed.
+            code: Generated code string.
+            language: Programming language.
+            criteria: Custom assessment criteria.
 
         Returns:
-            Human-readable explanation string.
+            Dict with assessment results.
         """
-        explanations: dict[str, str] = {
-            "read_file": f"Reading file '{args.get('path', 'unknown')}'",
-            "write_file": f"Writing file '{args.get('path', 'unknown')}'",
-            "patch": f"Patching file '{args.get('path', 'unknown')}'",
-            "execute_command": f"Running command: {args.get('command', 'unknown')}",
-            "process_manage": f"Managing process: {args.get('action', 'unknown')}",
-            "search_files": f"Searching for '{args.get('pattern', 'unknown')}'",
-            "git_init": f"Initializing git repo at '{args.get('path', 'unknown')}'",
-            "git_add": f"Staging files in '{args.get('path', 'unknown')}'",
-            "git_commit": f"Committing with message: {args.get('message', 'unknown')}",
-            "git_branch": f"{'Deleting' if args.get('delete') else 'Creating'} branch '{args.get('branch_name', 'unknown')}'",
-            "git_merge": f"Merging branch '{args.get('branch', 'unknown')}'",
-            "git_push": f"Pushing to remote '{args.get('remote', 'origin')}'",
-            "git_log": "Viewing commit history",
-            "clarify": "Asking user for clarification",
-            "confirm": "Requesting user confirmation",
-            "retrieve_context": f"Searching docs for: {args.get('query', 'unknown')}",
-            "delegate_task": f"Delegating task: {args.get('goal', 'unknown')[:50]}",
+        assessment: dict[str, Any] = {
+            "type": "code_assessment",
+            "language": language,
+            "line_count": len(code.strip().split("\n")),
+            "has_comments": "#" in code or "//" in code or "/*" in code,
+            "has_error_handling": any(
+                kw in code for kw in ["try:", "except", "catch", "if err", "raise"]
+            ),
+            "has_logging": any(
+                kw in code for kw in ["print(", "logging.", "log.", "console.log"]
+            ),
+            "indentation_level": SelfAssessment._estimate_indentation(code),
+            "meets_criteria": {},
         }
 
-        base = explanations.get(tool_name, f"Calling tool '{tool_name}'")
+        if criteria:
+            for key, expected in criteria.items():
+                assessment["meets_criteria"][key] = expected in code
 
-        # Add confidence note for potentially risky operations
-        risky_ops = {"execute_command", "git_push", "git_merge", "patch", "write_file"}
-        if tool_name in risky_ops:
-            bg = args.get("background")
-            if tool_name == "execute_command" and bg:
-                base += " (background)"
-
-        return base
+        return assessment
 
     @staticmethod
-    def explain_error(tool_name: str, error: str) -> str:
-        """Generate an explanation for a tool error.
+    def assess_response(
+        response: str,
+        criteria: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Assess the quality of a text response.
 
         Args:
-            tool_name: Name of the tool that failed.
-            error: Error message.
+            response: Generated response text.
+            criteria: Custom assessment criteria.
 
         Returns:
-            Human-readable error explanation.
+            Dict with assessment results.
         """
-        return f"Tool '{tool_name}' failed: {error[:200]}"
+        lines = response.strip().split("\n")
+        words = response.split()
+
+        assessment: dict[str, Any] = {
+            "type": "response_assessment",
+            "word_count": len(words),
+            "line_count": len(lines),
+            "has_headings": any(
+                line.startswith("#") or line.startswith("=") for line in lines
+            ),
+            "has_lists": any(
+                line.strip().startswith(("-", "*", "•", "1.", "2.")) for line in lines
+            ),
+            "has_code_blocks": "```" in response,
+            "has_references": any(
+                word.lower().endswith((".md", ".py", ".js", "http")) for word in words
+            ),
+            "completeness_score": min(1.0, len(words) / 100),
+        }
+
+        return assessment
 
     @staticmethod
-    def explain_llm_response(
-        response: str, has_tool_call: bool, tokens_used: int | None = None
-    ) -> str:
-        """Generate an explanation for an LLM response.
+    def _estimate_indentation(code: str) -> int:
+        """Estimate the average indentation level of code.
 
         Args:
-            response: The LLM's response text.
-            has_tool_call: Whether the response contained a tool call.
-            tokens_used: Number of tokens used (if known).
+            code: Code string.
 
         Returns:
-            Human-readable explanation.
+            Average indentation level.
         """
-        if has_tool_call:
-            desc = "LLM requested a tool call"
-        else:
-            preview = response[:80].replace("\n", " ")
-            desc = f"LLM responded: '{preview}...'" if len(response) > 80 else f"LLM responded: '{preview}'"
+        lines = code.split("\n")
+        indents = []
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped:
+                indent = len(line) - len(stripped)
+                indents.append(indent)
 
-        if tokens_used:
-            desc += f" ({tokens_used} tokens)"
+        if not indents:
+            return 0
 
-        return desc
+        total = sum(indents)
+        avg = total / len(indents)
+
+        # Convert to indentation level (assuming 4 spaces per level)
+        return int(avg / 4)
