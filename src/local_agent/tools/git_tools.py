@@ -1,6 +1,9 @@
-"""Git tools — git init, add, commit, status, diff."""
+"""Git tools — git init, add, commit, status, diff, branch, push, log, merge."""
+
+from __future__ import annotations
 
 import subprocess
+from typing import Any
 
 
 def _run_git(path: str, args: list[str]) -> str:
@@ -107,3 +110,190 @@ def git_diff(path: str) -> str:
         Git diff output.
     """
     return _run_git(path, ["diff"])
+
+
+def git_branch(path: str, branch_name: str, delete: bool = False) -> str:
+    """Create or checkout a branch.
+
+    Args:
+        path: Repository directory.
+        branch_name: Name of the branch to create or checkout.
+        delete: If True, delete the branch instead of creating/checking out.
+
+    Returns:
+        Git command output.
+    """
+    if delete:
+        return _run_git(path, ["branch", "-D", branch_name])
+    return _run_git(path, ["checkout", "-b", branch_name])
+
+
+def git_checkout(path: str, ref: str) -> str:
+    """Checkout an existing branch, tag, or commit.
+
+    Args:
+        path: Repository directory.
+        ref: Branch name, tag, or commit SHA to checkout.
+
+    Returns:
+        Git command output.
+    """
+    return _run_git(path, ["checkout", ref])
+
+
+def git_push(path: str, remote: str = "origin", branch: str | None = None) -> str:
+    """Push commits to a remote repository.
+
+    Args:
+        path: Repository directory.
+        remote: Remote name (default: origin).
+        branch: Branch to push (default: current branch).
+
+    Returns:
+        Git command output.
+    """
+    args = ["push"]
+    if branch:
+        args.extend([remote, branch])
+    else:
+        args.append(remote)
+    return _run_git(path, args)
+
+
+def git_log(
+    path: str,
+    count: int = 10,
+    oneline: bool = True,
+    all_branches: bool = False,
+) -> str:
+    """Get commit history.
+
+    Args:
+        path: Repository directory.
+        count: Number of commits to return (default: 10).
+        oneline: Use --oneline format (default: True).
+        all_branches: Show commits from all branches (default: False).
+
+    Returns:
+        Git log output.
+    """
+    args = ["log", f"-{count}"]
+    if oneline:
+        args.append("--oneline")
+    if all_branches:
+        args.append("--all")
+    return _run_git(path, args)
+
+
+def git_merge(path: str, branch: str, no_fast_forward: bool = False) -> str | dict[str, Any]:
+    """Merge a branch into the current branch.
+
+    Args:
+        path: Repository directory.
+        branch: Branch to merge.
+        no_fast_forward: Force a merge commit even if fast-forward is possible.
+
+    Returns:
+        Git command output, or a dict with conflict info if conflicts detected.
+    """
+    args = ["merge"]
+    if no_fast_forward:
+        args.append("--no-ff")
+    args.append(branch)
+
+    result = subprocess.run(
+        ["git", "-C", path] + args,
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        combined = result.stdout + result.stderr
+        # Check for merge conflicts
+        if "CONFLICT" in combined or "Automatic merge failed" in combined:
+            # Get list of conflicted files
+            status = _run_git(path, ["status", "--short"])
+            conflicted = [
+                line.split()[-1] for line in status.split("\n")
+                if line.startswith("UU")
+            ]
+            return {
+                "status": "conflict",
+                "message": "Merge conflicts detected",
+                "conflicted_files": conflicted,
+                "stderr": result.stderr.strip(),
+            }
+        raise RuntimeError(f"git merge failed: {combined.strip()}")
+
+    return result.stdout
+
+
+def git_remote(path: str) -> str:
+    """List remote repositories.
+
+    Args:
+        path: Repository directory.
+
+    Returns:
+        Git remote output.
+    """
+    return _run_git(path, ["remote", "-v"])
+
+
+def git_fetch(path: str, remote: str = "origin") -> str:
+    """Fetch updates from a remote repository.
+
+    Args:
+        path: Repository directory.
+        remote: Remote name (default: origin).
+
+    Returns:
+        Git fetch output.
+    """
+    return _run_git(path, ["fetch", remote])
+
+
+def git_stash(path: str, message: str | None = None) -> str:
+    """Stash changes in a temporary storage area.
+
+    Args:
+        path: Repository directory.
+        message: Optional stash message.
+
+    Returns:
+        Git stash output.
+    """
+    args = ["stash"]
+    if message:
+        args.extend(["save", "-m", message])
+    else:
+        args.append("save")
+    return _run_git(path, args)
+
+
+def git_stash_pop(path: str) -> str:
+    """Apply and remove the most recent stash.
+
+    Args:
+        path: Repository directory.
+
+    Returns:
+        Git stash pop output.
+    """
+    return _run_git(path, ["stash", "pop"])
+
+
+def git_tag(path: str, tag_name: str, message: str | None = None) -> str:
+    """Create a tag.
+
+    Args:
+        path: Repository directory.
+        tag_name: Tag name.
+        message: Optional annotated tag message.
+
+    Returns:
+        Git tag output.
+    """
+    if message:
+        return _run_git(path, ["tag", "-a", tag_name, "-m", message])
+    return _run_git(path, ["tag", tag_name])
