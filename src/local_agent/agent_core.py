@@ -3,6 +3,12 @@
 Supports multi-turn tool chaining: after each tool execution, the result is fed
 back to the LLM and the loop continues until the LLM returns a plain-text
 response or max_turns is reached.
+
+Dependencies are injected for testability:
+    - ModelRouter: handles all LLM communication
+    - ToolRegistry: handles tool registration and execution
+    - human_io: callback for human-in-the-loop interactions
+    - retry_strategy: adaptive retry controller
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ import re
 from typing import Any, Callable
 
 from local_agent.model_router import ModelRouter
+from local_agent.retry import RetryStrategy
 from local_agent.tool_registry import ToolRegistry
 from local_agent.tools.human_loop import BlockingInteraction
 
@@ -40,6 +47,7 @@ class AgentCore:
         streaming: bool = False,
         max_turns: int = 10,
         human_io: HumanIoCallback | None = None,
+        retry_strategy: RetryStrategy | None = None,
     ) -> None:
         self._router = router
         self._registry = registry
@@ -47,6 +55,7 @@ class AgentCore:
         self._max_turns = max_turns
         self._human_io = human_io
         self._history: list[dict[str, Any]] = []
+        self._retry = retry_strategy if retry_strategy is not None else RetryStrategy()
 
     def run_turn(self, user_input: str) -> str:
         """Run a single agent turn with multi-turn tool chaining.
@@ -61,7 +70,7 @@ class AgentCore:
         Returns:
             The agent's final response text.
         """
-        # Append user message to history
+        self._retry.reset()
         self._history.append({"role": "user", "content": user_input})
 
         final_response: str = ""
@@ -69,10 +78,8 @@ class AgentCore:
         for turn_num in range(self._max_turns):
             messages = self._build_messages()
 
-            if self._streaming:
-                full_response: str = "".join(self._router.stream_message(messages))
-            else:
-                full_response = self._router.send_message(messages)
+            # LLM call with retry
+            full_response: str = self._call_llm_with_retry(messages)
 
             # Store assistant response in history
             self._history.append({"role": "assistant", "content": full_response})
@@ -86,18 +93,42 @@ class AgentCore:
                 continue
 
             # No tool call — this is the final plain-text response
+            self._retry.record_success()
             return full_response
 
         # Max turns reached — return last response
         return final_response if final_response else self._last_assistant_response
 
-    @property
-    def _last_assistant_response(self) -> str:
-        """Get the last assistant message from history, or empty string."""
-        for msg in reversed(self._history):
-            if msg["role"] == "assistant":
-                return msg["content"]
-        return ""
+    def _call_llm_with_retry(self, messages: list[dict[str, Any]]) -> str:
+        """Call the LLM with adaptive retry on transient failures.
+
+        Args:
+            messages: Message list to send to the LLM.
+
+        Returns:
+            The LLM response string.
+        """
+        llm_retry = RetryStrategy(
+            max_retries=self._retry.max_retries,
+            max_backoff=self._retry.max_backoff,
+            backoff_fn=self._retry._backoff_fn,
+        )
+
+        while True:
+            try:
+                if self._streaming:
+                    return "".join(self._router.stream_message(messages))
+                else:
+                    return self._router.send_message(messages)
+            except Exception as e:
+                category = llm_retry.classify(e)
+                llm_retry.record_failure(e)
+
+                if not llm_retry.should_retry(e):
+                    raise
+
+                llm_retry.wait()
+                llm_retry.next_attempt()
 
     def _build_messages(self) -> list[dict[str, Any]]:
         """Build the message list including system prompt and history.
@@ -110,7 +141,21 @@ class AgentCore:
             {"role": "system", "content": system_prompt},
         ]
         messages.extend(self._history)
+
+        # Append retry context if there are recent failures
+        context = self._retry.context_summary()
+        if context:
+            messages.append({"role": "user", "content": context})
+
         return messages
+
+    @property
+    def _last_assistant_response(self) -> str:
+        """Get the last assistant message from history, or empty string."""
+        for msg in reversed(self._history):
+            if msg["role"] == "assistant":
+                return msg["content"]
+        return ""
 
     def _build_system_prompt(self) -> str:
         """Build the system prompt with tool definitions.
@@ -165,26 +210,80 @@ class AgentCore:
         tool_name: str = data["tool"]
         args: dict[str, Any] = data.get("args", {})
 
-        try:
-            result: Any = self._registry.execute(tool_name, args)
-        except KeyError:
-            return f"Error: tool '{tool_name}' not found."
-        except ValueError as e:
-            return f"Error executing '{tool_name}': {e}"
-        except BlockingInteraction as e:
-            # Human-in-the-loop: delegate to the callback
-            if self._human_io is not None:
-                answer = self._human_io(e)
-                return f"User response: {answer}"
-            return "Error: blocking interaction requested but no human_io callback configured."
+        # Execute with retry
+        result: str = self._execute_tool_with_retry(tool_name, args)
+        return result
 
-        # Format the result for feeding back to the LLM
-        result_str: str = str(result)
-        if isinstance(result, dict):
-            result_str = json.dumps(result, indent=2)
+    def _execute_tool_with_retry(self, tool_name: str, args: dict[str, Any]) -> str:
+        """Execute a tool call with adaptive retry.
 
-        return result_str
+        Args:
+            tool_name: Name of the tool to execute.
+            args: Arguments to pass to the tool.
+
+        Returns:
+            The tool execution result string.
+        """
+        while True:
+            try:
+                result: Any = self._registry.execute(tool_name, args)
+
+                # Handle human-in-the-loop
+                if isinstance(result, BlockingInteraction):
+                    if self._human_io is not None:
+                        answer = self._human_io(result)
+                        return f"User response: {answer}"
+                    return "Error: blocking interaction requested but no human_io callback configured."
+
+                # Format the result for feeding back to the LLM
+                result_str: str = str(result)
+                if isinstance(result, dict):
+                    result_str = json.dumps(result, indent=2)
+
+                self._retry.record_success()
+                return result_str
+
+            except BlockingInteraction as e:
+                if self._human_io is not None:
+                    answer = self._human_io(e)
+                    return f"User response: {answer}"
+                return "Error: blocking interaction requested but no human_io callback configured."
+
+            except KeyError as e:
+                # Unknown tool — permanent, don't retry
+                return f"Error: tool '{tool_name}' not found."
+
+            except ValueError as e:
+                error_msg = str(e)
+                category = self._retry.classify(error_msg)
+                self._retry.record_failure(error_msg)
+
+                if category == self._retry.classify("not found"):
+                    return f"Error executing '{tool_name}': {e}"
+
+                if not self._retry.should_retry(e):
+                    return f"Error executing '{tool_name}': {e}"
+
+                self._retry.next_attempt()
+                continue
+
+            except Exception as e:
+                error_msg = str(e)
+                category = self._retry.classify(error_msg)
+                self._retry.record_failure(error_msg)
+
+                if not self._retry.should_retry(e):
+                    # Exhausted retries — try escalation
+                    escalation = self._retry.escalate(error_msg)
+                    if escalation is not None:
+                        return escalation
+                    return f"Error executing '{tool_name}': {error_msg}"
+
+                self._retry.wait()
+                self._retry.next_attempt()
+                continue
 
     def reset_history(self) -> None:
         """Clear conversation history. Call between independent user turns."""
         self._history.clear()
+        self._retry.reset()
