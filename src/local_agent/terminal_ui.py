@@ -87,20 +87,27 @@ class TerminalUI:
             "",
             "[bold]Slash Commands:[/bold]",
             "  [yellow]/help[/yellow]       Show this help message",
+            "  [yellow]/ls[/yellow] [path]    List files in working directory (or given path)",
             "  [yellow]/status[/yellow]     Show current session status",
             "  [yellow]/quit[/yellow], [yellow]/exit[/yellow]  Exit the agent",
             "",
             "[bold]What I can do:[/bold]",
             "  • [green]Read, write, and edit files[/green] in your project",
             "  • [green]Search codebases[/green] (grep filenames and content)",
+            "  • [green]List directories[/green] with /ls [path]",
             "  • [green]Run shell commands[/green] and scripts",
             "  • [green]Manage git repos[/green] (init, add, commit, diff, status)",
             "  • [green]Extract PDFs[/green] to markdown text",
-            "  • [green]Answer questions[/green] about your code and project",
+            "  • [green]Manage skills[/green] — create, view, and load procedural memory",
+            "  • [green]Search past sessions[/green] with full-text search over history",
+            "  • [green]Delegate tasks[/green] to subagents with isolated contexts",
+            "  • [green]Persistent memory[/green] — save facts that survive across sessions",
+            "  • [green]Ask for clarification[/green] when needed before proceeding",
             "",
             "[bold]Tips:[/bold]",
             "  • Just describe what you want — I'll figure out the steps",
             "  • I can chain multiple tools together automatically",
+            "  • I adapt my retry strategy based on error type (transient vs permanent)",
             "  • If I need clarification, I'll ask before proceeding",
         ]
         return "\n".join(help_lines)
@@ -130,6 +137,9 @@ class TerminalUI:
             lines.append(f"  Model: {self.config.llm.model}")
             lines.append(f"  Toolsets: {', '.join(self.config.toolsets)}")
             return "\n".join(lines)
+
+        if cmd == "/ls" or cmd.startswith("/ls "):
+            return self._render_ls(cmd)
 
         return f"[bold red]Unknown command:[/bold red] {user_input}"
 
@@ -163,3 +173,49 @@ class TerminalUI:
     def format_error(self, error_message: str) -> str:
         """Format an error message for display."""
         return f"[bold red]Error: {error_message}[/bold red]"
+
+    def _render_ls(self, cmd: str) -> str:
+        """Render a listing of files in the working directory.
+
+        Supports /ls and /ls <path>.
+        """
+        import os
+        from pathlib import Path
+
+        # Extract optional path argument
+        parts = cmd.split(maxsplit=1)
+        target = parts[1] if len(parts) > 1 else self.config.work_dir
+
+        p = Path(target).expanduser()
+        if not p.exists():
+            return f"[bold red]Error: path not found[/bold red] {target}"
+        if not p.is_dir():
+            return f"[bold red]Error: not a directory[/bold red] {target}"
+
+        lines: list[str] = [f"[bold cyan]📁 {p.resolve()}[/bold cyan]"]
+
+        entries = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            name = entry.name
+            suffix = " [bold blue]/[/bold blue]" if entry.is_dir() else ""
+            if entry.is_file():
+                size = entry.stat().st_size
+                if size > 1024 * 1024:
+                    size_str = f"{size / (1024*1024):.1f}M"
+                elif size > 1024:
+                    size_str = f"{size / 1024:.1f}K"
+                else:
+                    size_str = f"{size}B"
+                suffix = f" [dim]{size_str}[/dim]"
+            lines.append(f"  {name}{suffix}")
+
+        total = len(entries)
+        hidden = sum(1 for e in entries if e.name.startswith("."))
+        if total == 0:
+            lines.append("  [dim](empty)[/dim]")
+        else:
+            lines.append(f"\n[dim]{total} entries[/dim]" + (f" [dim]({hidden} hidden)[/dim]" if hidden else ""))
+
+        return "\n".join(lines)

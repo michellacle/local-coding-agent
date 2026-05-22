@@ -20,6 +20,8 @@ from local_agent.tools.search_tools import search_files, list_directory
 from local_agent.tools.human_loop import clarify, confirm, BlockingInteraction, ClarificationRequest, ApprovalRequest
 from local_agent.tools.memory_store import memory, memory_search, memory_list
 from local_agent.tools.skill_manage import skill_manage, skill_view, skills_list
+from local_agent.tools.session_search import session_search
+from local_agent.multi_agent import delegate_task, delegate_batch
 
 
 def register_tools(registry: ToolRegistry) -> None:
@@ -443,6 +445,100 @@ def register_tools(registry: ToolRegistry) -> None:
             },
         ),
         fn=skills_list,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="session_search",
+            description="Search past conversation sessions for context from previous discussions. Supports discovery (query), scroll (session_id + around_message_id), and browse (no args) modes.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search keywords/phrases (discovery mode).",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session to scroll inside (scroll mode).",
+                    },
+                    "around_message_id": {
+                        "type": "integer",
+                        "description": "Message to center on (scroll mode).",
+                    },
+                    "window": {
+                        "type": "integer",
+                        "description": "Context window for scroll mode (1-20, default 5).",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max sessions to return (default 3, max 10).",
+                    },
+                    "role_filter": {
+                        "type": "string",
+                        "description": "Filter by role(s) e.g., 'user,assistant'.",
+                    },
+                },
+                "required": [],
+            },
+        ),
+        fn=session_search,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="delegate_task",
+            description="Spawn a subagent to work on a task in an isolated context. The child agent gets its own conversation, terminal session, and toolset.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "What the child agent should accomplish.",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Background information the child agent needs.",
+                    },
+                    "toolsets": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Toolsets to enable for this subagent (e.g., ['file', 'terminal']).",
+                    },
+                },
+                "required": ["goal"],
+            },
+        ),
+        fn=delegate_task,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="delegate_batch",
+            description="Delegate multiple tasks to parallel subagents (up to 3 concurrently).",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "goal": {"type": "string"},
+                                "context": {"type": "string"},
+                                "toolsets": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                        },
+                        "description": "List of task dicts with goal, context, and toolsets.",
+                    },
+                },
+                "required": ["tasks"],
+            },
+        ),
+        fn=delegate_batch,
     )
 
 

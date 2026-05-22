@@ -233,7 +233,7 @@ class SessionStore:
         if role_filter:
             roles = [r.strip() for r in role_filter.split(",") if r.strip()]
             if roles:
-                role_clause = " AND role IN (" + ", ".join("?" * len(roles)) + ")"
+                role_clause = " AND m.role IN (" + ", ".join("?" * len(roles)) + ")"
 
         params: list[str] = [query]
         if role_filter:

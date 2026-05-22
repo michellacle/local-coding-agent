@@ -321,3 +321,233 @@ class TestAgentCore:
         assert tool_result_msg["role"] == "user"
         assert '"result": 10' in tool_result_msg["content"]
         assert '"status": "ok"' in tool_result_msg["content"]
+
+
+class TestExtractJsonBraces:
+    """Test brace-counting JSON extraction."""
+
+    def setup_method(self) -> None:
+        self.agent = AgentCore.__new__(AgentCore)  # no __init__ needed
+
+    def test_simple_json(self):
+        result = self.agent._extract_json_braces('{"tool": "echo", "args": {"msg": "hi"}}')
+        assert result == '{"tool": "echo", "args": {"msg": "hi"}}'
+
+    def test_nested_braces(self):
+        text = '{"a": {"b": {"c": 1}}}'
+        result = self.agent._extract_json_braces(text)
+        assert result == text
+
+    def test_braces_in_string_value(self):
+        # Content has { } inside a string — brace counting still works
+        text = '{"content": "print({len(numbers)})"}'
+        result = self.agent._extract_json_braces(text)
+        assert result == text
+
+    def test_prose_before_json(self):
+        text = 'I will do that.\n\n{"tool": "echo", "args": {"msg": "hi"}}'
+        result = self.agent._extract_json_braces(text)
+        assert result == '{"tool": "echo", "args": {"msg": "hi"}}'
+
+    def test_prose_after_json(self):
+        text = '{"tool": "echo", "args": {"msg": "hi"}}\nDone.'
+        result = self.agent._extract_json_braces(text)
+        assert result == '{"tool": "echo", "args": {"msg": "hi"}}'
+
+    def test_no_json(self):
+        result = self.agent._extract_json_braces("Just plain text, nothing here.")
+        assert result is None
+
+    def test_multiple_objects(self):
+        """Returns the first complete JSON object."""
+        text = '{"a": 1} {"b": 2}'
+        result = self.agent._extract_json_braces(text)
+        assert result == '{"a": 1}'
+
+    def test_deeply_nested(self):
+        text = '{"tool": "write_file", "args": {"content": "f\\\"{x}\\\""}}'
+        result = self.agent._extract_json_braces(text)
+        assert result == text
+
+
+class TestRepairJson:
+    """Test JSON repair for literal control characters in strings."""
+
+    def setup_method(self) -> None:
+        self.agent = AgentCore.__new__(AgentCore)
+
+    def test_repair_literal_newlines(self):
+        text = '{"tool": "write_file", "args": {"content": "line1\nline2\nline3"}}'
+        result = self.agent._repair_json(text)
+        assert result == '{"tool": "write_file", "args": {"content": "line1\\nline2\\nline3"}}'
+
+    def test_repair_literal_tabs(self):
+        text = '{"msg": "col1\tcol2"}'
+        result = self.agent._repair_json(text)
+        assert result == '{"msg": "col1\\tcol2"}'
+
+    def test_repair_literal_carriage_returns(self):
+        text = '{"msg": "hello\rworld"}'
+        result = self.agent._repair_json(text)
+        assert result == '{"msg": "hello\\rworld"}'
+
+    def test_already_valid_json(self):
+        text = '{"tool": "echo", "args": {"msg": "hello"}}'
+        result = self.agent._repair_json(text)
+        assert result == text
+
+    def test_unrepairable_returns_none(self):
+        text = '{"tool": "echo" "args": {}}'  # missing comma
+        result = self.agent._repair_json(text)
+        assert result is None
+
+    def test_preserves_backslash_escapes(self):
+        text = '{"msg": "path\\\\to\\\\file"}'
+        result = self.agent._repair_json(text)
+        assert result == text
+
+    def test_repair_fstring_braces_in_content(self):
+        # The exact failure case: f-string braces in content + literal newlines
+        # Use escaped quotes properly so the JSON structure itself is valid
+        # after newline repair — only the newlines need fixing.
+        text = (
+            '{"tool": "write_file", "args": {"path": "new.py", "content": '
+            '"import random\n\nnumbers = [random.randint(1,100) for _ in range(10)]\n'
+            'total = sum(numbers)\nprint(f\\"Sum: {total}\\")"}}'
+        )
+        repaired = self.agent._repair_json(text)
+        assert repaired is not None
+        parsed = __import__("json").loads(repaired)
+        assert parsed["tool"] == "write_file"
+        assert "import random" in parsed["args"]["content"]
+
+
+class TestExecuteToolWithMalformedJson:
+    """Test that tool calls with literal newlines in content are executed."""
+
+    def _make_agent(self, max_turns=10) -> AgentCore:
+        router = MagicMock()
+        registry = ToolRegistry()
+        return AgentCore(router, registry, max_turns=max_turns)
+
+    def test_literal_newlines_in_write_file_content(self):
+        """Reproduce the real bug: LLM sends literal newlines in file content."""
+        agent = self._make_agent()
+
+        written_files: list[dict] = []
+
+        def fake_write(path, content):
+            written_files.append({"path": path, "content": content})
+            return {"status": "ok", "path": path}
+
+        agent._registry.register(
+            ToolSchema(
+                name="write_file",
+                description="Write a file",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                },
+            ),
+            fake_write,
+        )
+
+        # Simulate LLM response with literal newlines in content (the real bug)
+        llm_response = (
+            '{"tool": "write_file", "args": {"path": "new.py", "content": '
+            '"import random\\n\\nnumbers = [random.randint(1,100) for _ in range(10)]\\n'
+            'total = sum(numbers)\\nprint(f\\"Sum: {total}\\")"}}'
+        )
+
+        # Turn 1: tool call with newlines, Turn 2: final answer
+        agent._router.send_message = MagicMock(
+            side_effect=[llm_response, "File created successfully."]
+        )
+
+        result = agent.run_turn("create new.py with random sum")
+
+        # The tool should have been called — file was written
+        assert len(written_files) == 1
+        assert written_files[0]["path"] == "new.py"
+        assert "import random" in written_files[0]["content"]
+        assert result == "File created successfully."
+
+    def test_fstring_braces_in_content(self):
+        """f-string syntax like {total} in content should not break parsing."""
+        agent = self._make_agent()
+
+        called = [False]
+
+        def fake_write(path, content):
+            called[0] = True
+            return {"status": "ok"}
+
+        agent._registry.register(
+            ToolSchema(
+                name="write_file",
+                description="Write a file",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                },
+            ),
+            fake_write,
+        )
+
+        # JSON with {total} braces inside content string
+        agent._router.send_message = MagicMock(
+            side_effect=[
+                '{"tool": "write_file", "args": {"path": "x.py", "content": "print(f\\"Sum: {total}\\")"}}',
+                "Done.",
+            ]
+        )
+
+        result = agent.run_turn("write file with fstring")
+        assert called[0] is True
+        assert result == "Done."
+
+    def test_parentheses_in_content(self):
+        """Parentheses in content like random.randint(1,100) should work."""
+        agent = self._make_agent()
+
+        written: list[str] = []
+
+        def fake_write(path, content):
+            written.append(content)
+            return {"status": "ok"}
+
+        agent._registry.register(
+            ToolSchema(
+                name="write_file",
+                description="Write a file",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                },
+            ),
+            fake_write,
+        )
+
+        agent._router.send_message = MagicMock(
+            side_effect=[
+                '{"tool": "write_file", "args": {"path": "x.py", "content": "import random\\nnums = [random.randint(1, 100) for _ in range(10)]"}}',
+                "Done.",
+            ]
+        )
+
+        result = agent.run_turn("write file")
+        assert len(written) == 1
+        assert "randint" in written[0]
+        assert result == "Done."

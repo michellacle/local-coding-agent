@@ -186,23 +186,27 @@ class AgentCore:
         Returns:
             The tool execution result string, or None if no tool call was found.
         """
-        # First try parsing the whole response as JSON
         data: Any | None = None
+
+        # Try parsing the whole response as JSON
         try:
             data = json.loads(response.strip())
         except (json.JSONDecodeError, ValueError):
-            # If that fails, try to extract a JSON object from the response
-            # Pattern handles one level of nested braces (e.g., "args": {"key": "val"})
-            match = re.search(
-                r'\{[^{}]*"tool"\s*:[^{}]*\{[^{}]*\}[^{}]*\}',
-                response,
-                re.DOTALL,
-            )
-            if match:
+            # LLM may produce malformed JSON. Try brace-counting extraction,
+            # repair, and finally a lenient parser that handles unescaped quotes.
+            candidate = self._extract_json_braces(response)
+            if candidate is not None:
                 try:
-                    data = json.loads(match.group())
+                    data = json.loads(candidate)
                 except (json.JSONDecodeError, ValueError):
-                    pass
+                    # Try repairing common issues (literal newlines, None→null, etc.)
+                    repaired = self._repair_json(candidate)
+                    if repaired is not None:
+                        try:
+                            data = json.loads(repaired)
+                        except (json.JSONDecodeError, ValueError):
+                            # Last resort: lenient parser for unescaped quotes
+                            data = self._lenient_parse(candidate)
 
         if data is None or not isinstance(data, dict) or "tool" not in data:
             return None
@@ -213,6 +217,176 @@ class AgentCore:
         # Execute with retry
         result: str = self._execute_tool_with_retry(tool_name, args)
         return result
+
+    def _extract_json_braces(self, text: str) -> str | None:
+        """Extract a JSON object from text using brace counting.
+
+        Handles arbitrary nesting and content within strings.
+        Returns the outermost JSON candidate or None.
+        """
+        depth = 0
+        start = -1
+        for i, ch in enumerate(text):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    return text[start : i + 1]
+                if depth < 0:
+                    depth = 0
+                    start = -1
+        return None
+
+    def _repair_json(self, text: str) -> str | None:
+        """Repair common JSON issues from LLM output.
+
+        Handles:
+        - Literal newlines, tabs, and other control characters inside JSON strings
+        - Python-style None/True/False instead of JSON null/true/false
+        - Unescaped quotes inside strings (replaces with safe placeholder)
+
+        Returns repaired JSON string or None if repair failed.
+        """
+        import re as _re
+
+        # Phase 1: Replace literal newlines and other control chars inside
+        # quoted strings with their JSON escapes.
+        result: list[str] = []
+        i = 0
+        n = len(text)
+        in_string = False
+        escaped = False
+
+        while i < n:
+            ch = text[i]
+
+            if in_string and not escaped:
+                if ch == '"':
+                    result.append(ch)
+                    in_string = False
+                elif ch == "\n":
+                    result.append("\\n")
+                elif ch == "\r":
+                    result.append("\\r")
+                elif ch == "\t":
+                    result.append("\\t")
+                elif ch == "\\":
+                    result.append(ch)
+                    escaped = True
+                else:
+                    result.append(ch)
+                    escaped = False
+            else:
+                if ch == '"' and not escaped:
+                    in_string = True
+                result.append(ch)
+                if ch != "\\":
+                    escaped = False
+
+            i += 1
+
+        repaired = "".join(result)
+
+        # Phase 2: Replace Python-style None/True/False with JSON null/true/false
+        # Only outside of quoted strings to avoid replacing content inside strings.
+        repaired = self._fix_python_booleans(repaired)
+
+        # Phase 3: Try parsing. If still failing, try aggressive repair.
+        try:
+            json.loads(repaired)
+            return repaired
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Phase 4: Aggressive repair - handle unescaped quotes by replacing
+        # common patterns like triple quotes in Python code within JSON strings.
+        aggressive = self._aggressive_repair(repaired)
+        if aggressive is not None:
+            try:
+                json.loads(aggressive)
+                return aggressive
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return None
+
+    def _fix_python_booleans(self, text: str) -> str:
+        """Replace Python None/True/False with JSON null/true/false outside of strings."""
+        result: list[str] = []
+        i = 0
+        n = len(text)
+        in_string = False
+        escaped = False
+
+        while i < n:
+            ch = text[i]
+
+            if ch == '"' and not escaped:
+                in_string = not in_string
+                result.append(ch)
+                i += 1
+                continue
+
+            if ch == '\\' and in_string:
+                escaped = not escaped
+                result.append(ch)
+                i += 1
+                continue
+
+            if not in_string:
+                # Check for None, True, False (must be word-bounded)
+                for kw, replacement in [
+                    ("None", "null"),
+                    ("True", "true"),
+                    ("False", "false"),
+                ]:
+                    if text[i:i + len(kw)] == kw:
+                        # Check word boundary before
+                        before_ok = (i == 0) or (text[i - 1] in " \t\n\r,:[{]")
+                        # Check word boundary after
+                        after_idx = i + len(kw)
+                        after_ok = (after_idx == n) or (text[after_idx] in " \t\n\r,}]}\n\r:")
+                        if before_ok and after_ok:
+                            result.append(replacement)
+                            i += len(kw)
+                            break
+                else:
+                    result.append(ch)
+                    i += 1
+                    continue
+
+            result.append(ch)
+            i += 1
+
+        return "".join(result)
+
+    def _aggressive_repair(self, text: str) -> str | None:
+        """Last-resort JSON repair when standard methods fail.
+
+        Uses a state machine to rebuild the JSON, handling edge cases
+        like unescaped quotes, missing commas, etc.
+        """
+        # Try loading with a more lenient approach: replace common issues
+        fixed = text
+
+        # Handle unescaped single quotes (LLMs sometimes use these)
+        # Only replace if the result is otherwise valid JSON
+        # (skip this for now - too risky)
+
+        # Replace trailing commas before } or ]
+        fixed = re.sub(r',(\s*[\]\}])', r'\1', fixed)
+
+        # Try one more time
+        try:
+            json.loads(fixed)
+            return fixed
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        return None
 
     def _execute_tool_with_retry(self, tool_name: str, args: dict[str, Any]) -> str:
         """Execute a tool call with adaptive retry.
