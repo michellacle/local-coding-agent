@@ -43,6 +43,10 @@ def git_add(path: str, files: list[str]) -> str:
 def git_commit(path: str, message: str) -> str:
     """Create a commit with the given message.
 
+    Auto-configures a local author identity if none is set, so commits
+    work in isolated environments (CI, temp dirs, etc.) without requiring
+    a global git config.
+
     Args:
         path: Repository directory.
         message: Commit message.
@@ -50,7 +54,35 @@ def git_commit(path: str, message: str) -> str:
     Returns:
         Git command output.
     """
+    # Ensure a local author identity exists
+    _ensure_git_identity(path)
     return _run_git(path, ["commit", "-m", message])
+
+
+def _ensure_git_identity(path: str) -> None:
+    """Ensure the repo has a local user.name and user.email configured.
+
+    Only sets them locally (repo-level) if they are not already defined
+    globally or in the repo.
+    """
+    def _get_var(var: str) -> str | None:
+        result = subprocess.run(
+            ["git", "-C", path, "config", var],
+            capture_output=True, text=True,
+        )
+        return result.stdout.strip() or None
+
+    if not _get_var("user.name"):
+        subprocess.run(
+            ["git", "-C", path, "config", "user.name", "Local Agent"],
+            capture_output=True, text=True,
+        )
+
+    if not _get_var("user.email"):
+        subprocess.run(
+            ["git", "-C", path, "config", "user.email", "agent@local"],
+            capture_output=True, text=True,
+        )
 
 
 def git_status(path: str) -> str:

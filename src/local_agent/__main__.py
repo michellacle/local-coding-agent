@@ -16,6 +16,7 @@ from local_agent.terminal_ui import TerminalUI
 from local_agent.tools.file_tools import read_file, write_file, patch_file
 from local_agent.tools.terminal_tools import execute_command
 from local_agent.tools.git_tools import git_init, git_add, git_commit, git_status, git_diff
+from local_agent.tools.search_tools import search_files, list_directory
 
 
 def register_tools(registry: ToolRegistry) -> None:
@@ -166,6 +167,70 @@ def register_tools(registry: ToolRegistry) -> None:
             },
         ),
         fn=git_diff,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="search_files",
+            description="Search for files by name pattern or content regex. Use content search to find code matching a pattern, or filename search to find files by name.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regex pattern to search for in file contents or filenames",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to search in (default: current directory)",
+                    },
+                    "file_glob": {
+                        "type": "string",
+                        "description": "Optional glob to filter files (e.g., '*.py')",
+                    },
+                    "search_content": {
+                        "type": "boolean",
+                        "description": "If true, search file contents. If false, match filenames. Default: true.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results to return (default: 50)",
+                    },
+                },
+                "required": ["pattern"],
+            },
+        ),
+        fn=search_files,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="list_directory",
+            description="List directory contents as a sorted tree. Shows files and subdirectories up to the specified depth.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to list (default: current directory)",
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Max recursion depth (default: 3)",
+                    },
+                    "show_hidden": {
+                        "type": "boolean",
+                        "description": "Include dotfiles and hidden directories (default: false)",
+                    },
+                    "file_glob": {
+                        "type": "string",
+                        "description": "Only list files matching this glob pattern (e.g., '*.py')",
+                    },
+                },
+                "required": [],
+            },
+        ),
+        fn=list_directory,
     )
 
 
