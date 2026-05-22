@@ -17,6 +17,8 @@ from local_agent.tools.file_tools import read_file, write_file, patch_file
 from local_agent.tools.terminal_tools import execute_command
 from local_agent.tools.git_tools import git_init, git_add, git_commit, git_status, git_diff
 from local_agent.tools.search_tools import search_files, list_directory
+from local_agent.tools.human_loop import clarify, confirm, BlockingInteraction, ClarificationRequest, ApprovalRequest
+from local_agent.tools.memory_store import memory, memory_search, memory_list
 
 
 def register_tools(registry: ToolRegistry) -> None:
@@ -233,6 +235,163 @@ def register_tools(registry: ToolRegistry) -> None:
         fn=list_directory,
     )
 
+    registry.register(
+        schema=ToolSchema(
+            name="clarify",
+            description="Ask the user a clarification question. Supports multiple choice (up to 4 options) or open-ended questions.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question to present to the user.",
+                    },
+                    "choices": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Up to 4 answer choices. Omit for open-ended questions.",
+                    },
+                },
+                "required": ["question"],
+            },
+        ),
+        fn=clarify,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="confirm",
+            description="Request user approval before proceeding with a sensitive or destructive action.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "Short description of the action to approve.",
+                    },
+                    "details": {
+                        "type": "string",
+                        "description": "Extra context about what will happen.",
+                    },
+                },
+                "required": ["action"],
+            },
+        ),
+        fn=confirm,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="memory",
+            description="Save, update, or remove persistent memory entries. Memory survives across sessions.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "One of 'add', 'replace', 'remove'.",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "'user' for user profile, 'memory' for agent notes.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Entry content. Required for 'add' and 'replace'.",
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": "Substring identifying an existing entry. Required for 'replace' and 'remove'.",
+                    },
+                },
+                "required": ["action", "target"],
+            },
+        ),
+        fn=memory,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="memory_search",
+            description="Search persistent memory entries using full-text search.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (keywords, phrases).",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "If set, only search in this target ('user' or 'memory').",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results to return.",
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        fn=memory_search,
+    )
+
+    registry.register(
+        schema=ToolSchema(
+            name="memory_list",
+            description="List all memory entries, optionally filtered by target.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "If set, only list entries for this target.",
+                    },
+                },
+                "required": [],
+            },
+        ),
+        fn=memory_list,
+    )
+
+
+def _handle_clarification(console: Console, req: ClarificationRequest) -> str:
+    """Present a clarification question and collect the user's answer."""
+    console.print(f"\n[bold yellow]?[/bold yellow] {req.question}")
+    if req.is_multiple_choice:
+        for i, choice in enumerate(req.choices, 1):
+            console.print(f"  [bold]{i}[/bold]. {choice}")
+        console.print(f"  [bold]{len(req.choices) + 1}[/bold]. Other (type your answer)")
+        while True:
+            raw = input("  > ").strip()
+            if not raw:
+                continue
+            idx = int(raw) if raw.isdigit() else -1
+            if 1 <= idx <= len(req.choices):
+                return req.choices[idx - 1]
+            if idx == len(req.choices) + 1:
+                other = input("  Your answer: ").strip()
+                return other or "No answer provided."
+            console.print("  [dim]Invalid selection, try again.[/dim]")
+    else:
+        raw = input("  > ").strip()
+        return raw or "No answer provided."
+
+
+def _handle_approval(console: Console, req: ApprovalRequest) -> str:
+    """Present an approval prompt and collect yes/no."""
+    msg = f"[bold red]⚠[/bold red] {req.action}"
+    if req.details:
+        msg += f"\n    [dim]{req.details}[/dim]"
+    console.print(f"\n{msg}")
+    while True:
+        raw = input("  Proceed? [y/N] ").strip().lower()
+        if raw in ("y", "yes"):
+            return "approved"
+        if raw in ("n", "no", ""):
+            return "denied"
+        console.print("  [dim]Please answer y or n.[/dim]")
+
 
 def main() -> None:
     """Run the local coding agent."""
@@ -263,9 +422,22 @@ def main() -> None:
     registry: ToolRegistry = ToolRegistry()
     register_tools(registry)
 
+    console: Console = Console()
+
+    # Build human-in-the-loop callback for interactive mode
+    def _human_io_handler(exc: BlockingInteraction) -> str:
+        """Handle blocking human interactions in the terminal."""
+        req = exc.request
+        if isinstance(req, ClarificationRequest):
+            return _handle_clarification(console, req)
+        if isinstance(req, ApprovalRequest):
+            return _handle_approval(console, req)
+        return "User did not respond."
+
     # Build agent
     agent: AgentCore = AgentCore(
-        router=router, registry=registry, streaming=False, max_turns=args.max_turns
+        router=router, registry=registry, streaming=False, max_turns=args.max_turns,
+        human_io=_human_io_handler,
     )
 
     # Non-interactive mode

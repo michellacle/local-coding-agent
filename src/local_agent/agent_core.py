@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Callable
 
 from local_agent.model_router import ModelRouter
 from local_agent.tool_registry import ToolRegistry
+from local_agent.tools.human_loop import BlockingInteraction
+
+
+HumanIoCallback = Callable[[BlockingInteraction], str]
 
 
 class AgentCore:
@@ -21,11 +25,12 @@ class AgentCore:
     Takes user input, sends it to the LLM (with tool definitions in the
     system prompt), parses any tool calls from the response, executes them,
     and loops back with the result — chaining tool calls until the LLM
-    returns a final plain-text answer.
+    returns a plain-text answer or max_turns is reached.
 
     Dependencies are injected for testability:
         - ModelRouter: handles all LLM communication
         - ToolRegistry: handles tool registration and execution
+        - human_io: callback for human-in-the-loop interactions
     """
 
     def __init__(
@@ -34,11 +39,13 @@ class AgentCore:
         registry: ToolRegistry,
         streaming: bool = False,
         max_turns: int = 10,
+        human_io: HumanIoCallback | None = None,
     ) -> None:
         self._router = router
         self._registry = registry
         self._streaming = streaming
         self._max_turns = max_turns
+        self._human_io = human_io
         self._history: list[dict[str, Any]] = []
 
     def run_turn(self, user_input: str) -> str:
@@ -164,6 +171,12 @@ class AgentCore:
             return f"Error: tool '{tool_name}' not found."
         except ValueError as e:
             return f"Error executing '{tool_name}': {e}"
+        except BlockingInteraction as e:
+            # Human-in-the-loop: delegate to the callback
+            if self._human_io is not None:
+                answer = self._human_io(e)
+                return f"User response: {answer}"
+            return "Error: blocking interaction requested but no human_io callback configured."
 
         # Format the result for feeding back to the LLM
         result_str: str = str(result)
