@@ -151,6 +151,8 @@ class TerminalUI:
             "/models": self._cmd_models(args),
             "/plan": self._cmd_plan(args),
             "/stats": self._cmd_stats(),
+            "/code": self._cmd_code(args),
+            "/provider": self._cmd_provider(args),
         }
 
         if cmd in dispatch:
@@ -177,7 +179,9 @@ class TerminalUI:
           [yellow]/models N[/yellow]      Switch to model at index N
           [yellow]/plan <goal>[/yellow]     Decompose a goal into actionable steps
           [yellow]/plan list[/yellow]     List saved plans
+          [yellow]/code <description>[/yellow] Build code and write it to disk
           [yellow]/stats[/yellow]         Show model routing stats & token usage
+          [yellow]/provider[/yellow]       View/change LLM provider config
           [yellow]/quit, /exit[/yellow]    Exit the agent
 
         [bold]File Operations[/bold]
@@ -1143,6 +1147,144 @@ class TerminalUI:
         lines.append(f"  {'TOTAL':<35} {total_requests:>8} {total_errors:>7} {'':>8} {total_tokens:>10}")
 
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------ #
+    #  /provider command — view and change LLM provider config            #
+    # ------------------------------------------------------------------ #
+
+    def _cmd_provider(self, args: str) -> str:
+        """View and change the upstream LLM provider configuration.
+
+        Usage:
+          /provider              Show current provider config
+          /provider host <url>   Set provider host (e.g., localhost or http://...)
+          /provider port <N>     Set provider port
+          /provider model <name> Set model name
+          /provider url <base>   Set full base URL (overrides host+port)
+        """
+        if not args:
+            return self._cmd_provider_show()
+
+        parts = args.split(maxsplit=1)
+        action = parts[0].lower()
+        value = parts[1] if len(parts) > 1 else ""
+
+        if action == "host":
+            return self._cmd_provider_set_host(value)
+        elif action == "port":
+            return self._cmd_provider_set_port(value)
+        elif action == "model":
+            return self._cmd_provider_set_model(value)
+        elif action == "url":
+            return self._cmd_provider_set_url(value)
+        else:
+            return textwrap.dedent(f"""\
+            [bold red]Unknown provider action:[/bold red] {action}
+
+            Usage:
+              [yellow]/provider[/yellow]            Show current provider config
+              [yellow]/provider host <url>[/yellow]   Set provider host
+              [yellow]/provider port <N>[/yellow]     Set provider port
+              [yellow]/provider model <name>[/yellow]  Set model name
+              [yellow]/provider url <base>[/yellow]   Set full base URL""")
+
+    def _cmd_provider_show(self) -> str:
+        """Show current provider configuration."""
+        llm = self.config.llm
+        lines = [
+            "[bold cyan]Current LLM Provider[/bold cyan]",
+            "",
+            f"  [bold]Model:[/bold]    {llm.model}",
+            f"  [bold]Host:[/bold]     {llm.host}",
+            f"  [bold]Port:[/bold]     {llm.port}",
+            f"  [bold]Base URL:[/bold] {llm.base_url}",
+            f"  [bold]Deterministic:[/bold] {llm.deterministic}",
+        ]
+        return "\n".join(lines)
+
+    def _cmd_provider_set_host(self, value: str) -> str:
+        """Set the provider host."""
+        if not value:
+            return "[bold red]Error:[/bold red] Usage: /provider host <url>"
+        self.config.llm.host = value
+        return f"[bold green]✓[/bold green] Provider host set to [bold]{value}[/bold] (base URL: {self.config.llm.base_url})"
+
+    def _cmd_provider_set_port(self, value: str) -> str:
+        """Set the provider port."""
+        if not value:
+            return "[bold red]Error:[/bold red] Usage: /provider port <N>"
+        try:
+            port = int(value)
+        except ValueError:
+            return f"[bold red]Error:[/bold red] '{value}' is not a valid port number"
+        self.config.llm.port = port
+        return f"[bold green]✓[/bold green] Provider port set to [bold]{port}[/bold] (base URL: {self.config.llm.base_url})"
+
+    def _cmd_provider_set_model(self, value: str) -> str:
+        """Set the model name."""
+        if not value:
+            return "[bold red]Error:[/bold red] Usage: /provider model <name>"
+        self.config.llm.model = value
+        return f"[bold green]✓[/bold green] Model set to [bold]{value}[/bold]"
+
+    def _cmd_provider_set_url(self, value: str) -> str:
+        """Set the full base URL (overrides host+port)."""
+        if not value:
+            return "[bold red]Error:[/bold red] Usage: /provider url <base>"
+        self.config.llm.host = value
+        self.config.llm.port = 0
+        return f"[bold green]✓[/bold green] Provider URL set to [bold]{value}[/bold]"
+
+    # ------------------------------------------------------------------ #
+    #  /code command — force file-producing coding tasks                  #
+    # ------------------------------------------------------------------ #
+
+    def _cmd_code(self, args: str) -> str:
+        """Code mode: the agent MUST write one or more files to disk.
+
+        Usage:
+          /code <description>    Build code and write it to files
+
+        The agent cannot exit this command successfully without having
+        created at least one file on disk. If clarification is needed,
+        it may ask via human-in-the-loop, but the final result must
+        always be written files.
+        """
+        if not args:
+            return textwrap.dedent("""\
+            [bold cyan]Code Mode — Write Code to Disk[/bold cyan]
+
+            Usage:
+              [yellow]/code <description>[/yellow]  Build code and write it to files
+
+            The agent WILL NOT succeed without writing at least one file.
+            If more details are needed, it will ask clarifying questions,
+            but the end result is always code on disk.
+
+            Examples:
+              /code "A Python CLI to convert CSV to JSON"
+              /code "A React component for a todo list"
+              /code "A bash script to backup a directory to tar.gz""")
+
+        # Build a强制 prompt: inject the user's request with a strict
+        # directive that files MUST be written before the turn completes.
+        code_instruction = textwrap.dedent(f"""\
+            CODE MODE — You are in /code mode. Your task is to build the following and write the result to disk:
+
+            {args}
+
+            STRICT RULES:
+            1. You MUST create one or more files on disk. This command CANNOT succeed without writing files.
+            2. Use the write_file tool to write each file. Use the working directory: {self.work_dir}
+            3. If you need clarification, use the human_in_the_loop tool to ask the user.
+            4. After writing all files, confirm which files were created and their paths.
+            5. Do NOT just print code to stdout — write it to actual files.
+            6. Create proper file structure (e.g., __init__.py for Python packages, package.json for Node, etc.)
+            7. If the project has multiple files, write them all.
+
+            Build it now and write everything to disk.""")
+
+        return self.agent.run_turn(code_instruction)
 
     # ------------------------------------------------------------------ #
     #  /ls renderer                                                        #

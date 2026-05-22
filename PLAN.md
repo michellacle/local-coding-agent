@@ -50,6 +50,22 @@
 
 ---
 
+## Phase 5 (Advanced IDE-like Features) — ALL DONE
+
+### 30. LSP Client ✅
+**Status:** Complete — JSON-RPC stdio LSP client: diagnostics, go-to-definition, references, symbols, hover info. Supports pyright, typescript-language-server, rust-analyzer, etc.
+
+### 31. Project Context Auto-loading ✅
+**Status:** Complete — Scans project for AGENTS.md, CLAUDE.md, .cursorrules, pyproject.toml, package.json, README.md, etc. Loads and formats them into system prompt blocks with priority ordering and size limits.
+
+### 32. Diff Review Workflow ✅
+**Status:** Complete — Proposed change management: propose changes, preview unified diffs, approve/reject individual files, batch apply/reject. Mirrors Claude Code's "apply" workflow.
+
+### 33. In-Context Learning (ICL) ✅
+**Status:** Complete — Tracks user corrections during a session, categorizes them (style/naming/logic/security), and injects few-shot examples into the system prompt. Corrections persist to JSON.
+
+---
+
 ## Phase 1 Completion (Foundation) — ALL DONE
 
 ### 1. Multi-turn Tool Chaining ✅
