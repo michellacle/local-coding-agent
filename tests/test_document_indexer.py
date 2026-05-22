@@ -220,8 +220,8 @@ class TestDocumentIndexer:
 class TestOllamaEmbedder:
     """Test OllamaEmbedder (with mocked HTTP)."""
 
-    def test_embed_calls_ollama_api(self):
-        embedder = OllamaEmbedder(base_url="http://localhost:11434")
+    def test_embed_calls_api(self):
+        embedder = OllamaEmbedder(base_url="http://localhost:7778")
 
         mock_response = MagicMock()
         mock_response.read.return_value = json_bytes({"embedding": [0.1, 0.2, 0.3]})
@@ -234,7 +234,7 @@ class TestOllamaEmbedder:
 
     def test_embed_custom_model(self):
         embedder = OllamaEmbedder(
-            base_url="http://localhost:11434",
+            base_url="http://localhost:7778",
             model="custom-embed",
         )
         mock_response = MagicMock()
@@ -256,8 +256,8 @@ class TestOllamaEmbedder:
                 embedder.embed("test")
 
     def test_embed_trailing_slash_removed(self):
-        embedder = OllamaEmbedder(base_url="http://localhost:11434/")
-        assert embedder._base_url == "http://localhost:11434"
+        embedder = OllamaEmbedder(base_url="http://localhost:7778/")
+        assert embedder._base_url == "http://localhost:7778"
 
 
 class TestChunking:

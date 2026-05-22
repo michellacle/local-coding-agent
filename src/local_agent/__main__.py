@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
-from pathlib import Path
 
+# Enable readline: left/right cursor movement + up/down history recall
+try:
+    import readline
+except ImportError:
+    readline = None
+
+from pathlib import Path
 from rich.console import Console
 
 from local_agent.config import LLMConfig, AppConfig
@@ -637,6 +644,17 @@ def main() -> None:
     console: Console = Console()
     console.print(ui.render_welcome())
 
+    # Enable readline: arrow-key history recall + left/right cursor movement
+    _history_file: str | None = None
+    if readline is not None:
+        readline.set_history_length(500)
+        _history_file = str(Path.home() / ".local-coding-agent" / "input_history")
+        if os.path.isfile(_history_file):
+            try:
+                readline.read_history_file(_history_file)
+            except Exception:
+                pass
+
     # Main loop — reset history between independent user turns
     try:
         while True:
@@ -644,6 +662,9 @@ def main() -> None:
             cleaned: str | None = ui.process_input(raw)
             if cleaned is None:
                 continue
+            # Record every non-empty command in readline history
+            if readline is not None:
+                readline.add_history(cleaned)
             if ui.should_stop(cleaned):
                 console.print("[dim]Goodbye![/dim]")
                 break
@@ -662,7 +683,14 @@ def main() -> None:
             agent.reset_history()
     except KeyboardInterrupt:
         console.print("\n[dim]Interrupted. Goodbye![/dim]")
-        sys.exit(0)
+    finally:
+        # Persist readline history to disk
+        if readline is not None and _history_file is not None:
+            try:
+                Path(_history_file).parent.mkdir(parents=True, exist_ok=True)
+                readline.write_history_file(_history_file)
+            except Exception:
+                pass
 
 
 def _run_non_interactive(agent: AgentCore, prompt: str) -> None:

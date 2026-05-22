@@ -38,9 +38,9 @@ class LLMConfig:
         deterministic: Whether to use deterministic generation (temperature=0).
     """
 
-    model: str = "qwen3.5:4b"
+    model: str = "llama"
     host: str = "localhost"
-    port: int = 11434
+    port: int = 7778
     deterministic: bool = False
 
     @property
@@ -60,9 +60,9 @@ class LLMConfig:
             LLMConfig instance with values from env or defaults.
         """
         return cls(
-            model=os.environ.get("LLM_MODEL", "qwen3.5:4b"),
+            model=os.environ.get("LLM_MODEL", "llama"),
             host=os.environ.get("LLM_HOST", "localhost"),
-            port=int(os.environ.get("LLM_PORT", "11434")),
+            port=int(os.environ.get("LLM_PORT", "7778")),
             deterministic=os.environ.get("LLM_DETERMINISTIC", "").lower() in ("1", "true"),
         )
 

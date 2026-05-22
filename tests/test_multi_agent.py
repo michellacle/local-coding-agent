@@ -84,7 +84,7 @@ class TestDelegateAgentInit:
         self.router = MagicMock()
         self.router.config = MagicMock()
         self.router.config.host = "localhost"
-        self.router.config.port = 11434
+        self.router.config.port = 7778
         self.router.config.model = "test-model"
         self.router.config.deterministic = False
         self.registry = MagicMock()
@@ -146,7 +146,7 @@ class TestBuildChildRegistry:
         self.router = MagicMock()
         self.router.config = MagicMock()
         self.router.config.host = "localhost"
-        self.router.config.port = 11434
+        self.router.config.port = 7778
         self.router.config.model = "test"
         self.router.config.deterministic = False
 
@@ -200,7 +200,7 @@ class TestBuildSystemPrompt:
         self.router = MagicMock()
         self.router.config = MagicMock()
         self.router.config.host = "localhost"
-        self.router.config.port = 11434
+        self.router.config.port = 7778
         self.router.config.model = "test"
         self.router.config.deterministic = False
         self.registry = MagicMock()
@@ -242,7 +242,7 @@ class TestRunChildAgent:
         self.router = MagicMock()
         self.router.config = MagicMock()
         self.router.config.host = "localhost"
-        self.router.config.port = 11434
+        self.router.config.port = 7778
         self.router.config.model = "test"
         self.router.config.deterministic = False
 
@@ -309,7 +309,7 @@ class TestBatchDelegation:
         self.router = MagicMock()
         self.router.config = MagicMock()
         self.router.config.host = "localhost"
-        self.router.config.port = 11434
+        self.router.config.port = 7778
         self.router.config.model = "test"
         self.router.config.deterministic = False
 

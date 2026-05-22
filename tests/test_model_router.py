@@ -42,7 +42,7 @@ class TestModelRouterSend:
             router.send_message([{"role": "user", "content": "hi"}])
             mock_post.assert_called_once()
             call_args = mock_post.call_args
-            assert call_args[0][0] == "http://localhost:11434/v1/chat/completions"
+            assert call_args[0][0] == "http://localhost:7778/v1/chat/completions"
 
     def test_send_message_sends_model(self):
         router = self._make_router()

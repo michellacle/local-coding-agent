@@ -1,13 +1,13 @@
 """Integration tests — end-to-end smoke tests for the full system.
 
 These tests verify that:
-  1. Ollama is running and reachable
+  1. llama.cpp is running and reachable on localhost:7778
   2. The local coding agent can execute a prompt non-interactively
   3. The agent's tool calls actually affect the filesystem
   4. Multi-turn tool chaining works (write -> read, write -> patch, etc.)
 
 Requirements:
-  - Ollama running on localhost:11434 with qwen3.5:4b pulled
+  - llama.cpp server running on localhost:7778
   - This project's .venv activated
 """
 
@@ -37,8 +37,8 @@ def _run_agent(prompt: str, work_dir: Path, max_turns: int = 10) -> subprocess.C
 
     env = {
         "LLM_HOST": "localhost",
-        "LLM_MODEL": "qwen3.5:4b",
-        "LLM_PORT": "11434",
+        "LLM_MODEL": "llama",
+        "LLM_PORT": "7778",
         "PATH": str(Path(sys.prefix) / "bin") + ":" + os.environ.get("PATH", ""),
     }
 
@@ -57,21 +57,16 @@ def _run_agent(prompt: str, work_dir: Path, max_turns: int = 10) -> subprocess.C
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
-def test_ollama_running_and_model_available():
-    """Verify Ollama is running and qwen3.5:4b can produce a completion."""
-    resp = httpx.get("http://localhost:11434/api/tags", timeout=10.0)
-    assert resp.status_code == 200, "Ollama API /api/tags returned non-200"
-
-    data = resp.json()
-    model_names = [m["name"] for m in data.get("models", [])]
-    assert any(
-        "qwen3.5:4b" in name for name in model_names
-    ), f"qwen3.5:4b not found in models: {model_names}"
+def test_llamacpp_running_and_model_available():
+    """Verify llama.cpp is running and the default model can produce a completion."""
+    # Check server is up via models endpoint
+    resp = httpx.get("http://localhost:7778/v1/models", timeout=10.0)
+    assert resp.status_code == 200, "llama.cpp API /v1/models returned non-200"
 
     chat_resp = httpx.post(
-        "http://localhost:11434/v1/chat/completions",
+        "http://localhost:7778/v1/chat/completions",
         json={
-            "model": "qwen3.5:4b",
+            "model": "llama",
             "messages": [
                 {"role": "user", "content": "Say ONLY the word hello and nothing else."},
             ],
@@ -80,11 +75,11 @@ def test_ollama_running_and_model_available():
         timeout=120.0,
     )
     assert chat_resp.status_code == 200, (
-        f"Ollama chat completions failed: {chat_resp.text}"
+        f"llama.cpp chat completions failed: {chat_resp.text}"
     )
     content = chat_resp.json()["choices"][0]["message"]["content"]
     content = content.strip()
-    print(f"  Ollama response: {content if content else '(empty but OK)'}")
+    print(f"  llama.cpp response: {content if content else '(empty but OK)'}")
 
 
 # ---------------------------------------------------------------------------

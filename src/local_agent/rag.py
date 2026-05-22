@@ -58,16 +58,16 @@ class SearchResult:
 class EmbeddingBackend:
     """Embedding generation backend.
 
-    Supports Ollama, SentenceTransformers, and TF-IDF fallback.
+    Supports llama-cpp, SentenceTransformers, and TF-IDF fallback.
     """
 
-    def __init__(self, backend: str = "ollama", model: str = "nomic-embed-text", url: str = "http://localhost:11434"):
+    def __init__(self, backend: str = "llama-cpp", model: str = "nomic-embed-text", url: str = "http://localhost:7778"):
         """Initialize the embedding backend.
 
         Args:
-            backend: Backend type ("ollama", "sentence-transformers", "tfidf").
+            backend: Backend type ("llama-cpp", "sentence-transformers", "tfidf").
             model: Model name to use.
-            url: Ollama URL (only for "ollama" backend).
+            url: llama.cpp URL (only for "llama-cpp" backend).
         """
         self._backend = backend
         self._model = model
@@ -77,6 +77,8 @@ class EmbeddingBackend:
 
         if backend == "ollama":
             self._embedder = self._ollama_embed
+        elif backend == "llama-cpp":
+            self._embedder = self._llama_cpp_embed
         elif backend == "sentence-transformers":
             self._embedder = self._sentence_transformers_embed
         elif backend == "tfidf":
@@ -125,6 +127,40 @@ class EmbeddingBackend:
                     all_embeddings.append(emb)
             except (urllib.error.URLError, json.JSONDecodeError, Exception) as e:
                 # Fallback to zero vector if Ollama fails
+                if self._embedding_dim == 0:
+                    self._embedding_dim = 768  # nomic-embed-text default
+                all_embeddings.append([0.0] * self._embedding_dim)
+
+        return all_embeddings
+
+    def _llama_cpp_embed(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings using llama.cpp OpenAI-compatible API."""
+        all_embeddings: list[list[float]] = []
+
+        for text in texts:
+            try:
+                import urllib.request
+                import urllib.error
+
+                payload = json.dumps({
+                    "model": self._model,
+                    "input": text,
+                }).encode()
+                req = urllib.request.Request(
+                    f"{self._url}/v1/embeddings",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read())
+                    emb = data["data"][0]["embedding"]
+                    if emb:
+                        self._embedding_dim = len(emb)
+                    all_embeddings.append(emb)
+            except (urllib.error.URLError, json.JSONDecodeError, Exception) as e:
+                # Fallback to zero vector if llama.cpp fails
                 if self._embedding_dim == 0:
                     self._embedding_dim = 768  # nomic-embed-text default
                 all_embeddings.append([0.0] * self._embedding_dim)
@@ -523,26 +559,26 @@ class RAGPipeline:
     """RAG pipeline — combine embedding, vector store, and retrieval.
 
     Example:
-        pipeline = RAGPipeline(embedding_backend="ollama")
+        pipeline = RAGPipeline(embedding_backend="llama-cpp")
         pipeline.index_directory("/path/to/docs")
         results = pipeline.query("How do I configure the LLM provider?")
     """
 
     def __init__(
         self,
-        embedding_backend: str = "ollama",
+        embedding_backend: str = "llama-cpp",
         embedding_model: str = "nomic-embed-text",
-        embedding_url: str = "http://localhost:11434",
+        embedding_url: str = "http://localhost:7778",
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
         db_path: str | None = None,
-    ):
-        """Initialize the RAG pipeline.
+    ) -> None:
+        """Create a RAG pipeline.
 
         Args:
-            embedding_backend: Embedding backend ("ollama", "sentence-transformers", "tfidf").
+            embedding_backend: Embedding backend ("llama-cpp", "sentence-transformers", "tfidf").
             embedding_model: Embedding model name.
-            embedding_url: Ollama URL (for "ollama" backend).
+            embedding_url: llama.cpp URL (for "llama-cpp" backend).
             chunk_size: Chunk size for document indexing.
             chunk_overlap: Overlap between chunks.
             db_path: Optional SQLite database path for persistence.

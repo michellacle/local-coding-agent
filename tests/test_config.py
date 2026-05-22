@@ -16,10 +16,10 @@ class TestConfigManagerDefaults:
         assert mgr.to_dict() == {}
 
     def test_default_config(self):
-        defaults = {"llm": {"provider": "ollama-local", "model": "qwen3.5:4b"}}
+        defaults = {"llm": {"provider": "llama-cpp", "model": "llama"}}
         mgr = ConfigManager(default_config=defaults)
-        assert mgr.get("llm.provider") == "ollama-local"
-        assert mgr.get("llm.model") == "qwen3.5:4b"
+        assert mgr.get("llm.provider") == "llama-cpp"
+        assert mgr.get("llm.model") == "llama"
 
     def test_get_missing_key(self):
         mgr = ConfigManager()
@@ -43,10 +43,10 @@ class TestConfigManagerDefaults:
         assert mgr.get("a.b.c") == 100
 
     def test_get_section(self):
-        defaults = {"llm": {"provider": "ollama", "model": "qwen"}, "db": {"path": "/tmp"}}
+        defaults = {"llm": {"provider": "llama-cpp", "model": "llama"}, "db": {"path": "/tmp"}}
         mgr = ConfigManager(default_config=defaults)
         section = mgr.get_section("llm")
-        assert section == {"provider": "ollama", "model": "qwen"}
+        assert section == {"provider": "llama-cpp", "model": "llama"}
 
     def test_get_section_missing(self):
         mgr = ConfigManager()
@@ -62,10 +62,10 @@ class TestConfigManagerDict:
         assert mgr.get("key") == "value"
 
     def test_load_dict_override_defaults(self):
-        defaults = {"llm": {"provider": "ollama", "model": "qwen"}}
+        defaults = {"llm": {"provider": "llama-cpp", "model": "llama"}}
         mgr = ConfigManager(default_config=defaults)
         mgr.load_dict({"llm": {"model": "mistral"}}, priority=1)
-        assert mgr.get("llm.provider") == "ollama"  # from defaults
+        assert mgr.get("llm.provider") == "llama-cpp"  # from defaults
         assert mgr.get("llm.model") == "mistral"  # overridden
 
     def test_load_dict_priority(self):

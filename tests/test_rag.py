@@ -78,9 +78,9 @@ class TestEmbeddingBackend:
         # Same text should produce identical embeddings
         assert embeddings[0] == embeddings[1]
 
-    def test_ollama_backend_returns_fallback_when_offline(self):
-        backend = EmbeddingBackend(backend="ollama", url="http://localhost:11434")
-        # Should return zero vectors when Ollama is offline (graceful fallback)
+    def test_llama_cpp_backend_returns_fallback_when_offline(self):
+        backend = EmbeddingBackend(backend="llama-cpp", url="http://localhost:7778")
+        # Should return zero vectors when llama-cpp is offline (graceful fallback)
         embeddings = backend.embed(["test"])
         assert len(embeddings) == 1
         # Fallback should produce a vector (zeros when no connection)

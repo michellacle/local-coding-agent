@@ -17,7 +17,7 @@ class TestTerminalUI:
         config = MagicMock()
         config.work_dir = "/tmp/test"
         config.llm = MagicMock()
-        config.llm.model = "qwen3.5:4b"
+        config.llm.model = "llama"
         config.toolsets = ["file", "terminal", "git"]
         ui = TerminalUI(agent, config)
         return ui, agent
@@ -138,7 +138,7 @@ class TestTerminalUI:
         assert result is not None
         assert "Session Status" in result
         assert "/tmp/test" in result
-        assert "qwen3.5:4b" in result
+        assert "llama" in result
         assert "file" in result
 
     def test_handle_quit_command(self):
